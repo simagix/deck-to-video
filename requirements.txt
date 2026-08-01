@@ -1,0 +1,19 @@
+# Google Slides API (optional — only needed for Google Slides input)
+google-api-python-client>=2.65.0
+google-auth>=2.0.0
+google-auth-oauthlib>=0.7.1
+google-auth-httplib2>=0.1.0
+
+# PPTX input
+python-pptx>=0.6.21
+pypdfium2>=4.0.0
+
+# HTTP + env
+requests>=2.28.0
+python-dotenv>=1.0.0
+
+# Slide image processing
+Pillow>=9.0.0
+
+# Video assembly (bundles FFmpeg via imageio-ffmpeg)
+moviepy>=1.0.3
