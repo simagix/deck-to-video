@@ -482,18 +482,14 @@ if __name__ == "__main__":
         action="store_true",
         help="Generate voiceover WAVs via Voicebox (default: reuse existing slide_XX_voiceover.wav)",
     )
-    personality_group = parser.add_mutually_exclusive_group()
-    personality_group.add_argument(
+    parser.add_argument(
         "--personality",
         dest="personality",
         action="store_true",
-        help="Rewrite speaker notes in the profile's voice before TTS (default: off)",
-    )
-    personality_group.add_argument(
-        "--no-personality",
-        dest="personality",
-        action="store_false",
-        help="Send speaker notes to Voicebox as plain TTS (default)",
+        help=(
+            "Rewrite speaker notes in the profile's voice before TTS "
+            "(default: off; also enabled by VOICEBOX_PERSONALITY=1 in .env)"
+        ),
     )
     parser.set_defaults(personality=None)
     parser.add_argument(
