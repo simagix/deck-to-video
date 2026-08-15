@@ -45,6 +45,9 @@ token.json
 # Generated output
 out/
 
+# Media / voice-clone reference assets
+*.m4a
+
 # Editor / IDE
 .idea/
 .vscode/

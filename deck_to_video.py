@@ -49,6 +49,7 @@ import argparse
 import os
 import re
 import sys
+import wave
 from typing import List, Optional
 
 _SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
@@ -70,7 +71,9 @@ from narration import prepare_narration
 from paths import (
     DEFAULT_FPS,
     DEFAULT_INTER_SLIDE_PAUSE_SECONDS,
+    DEFAULT_KEN_BURNS_ZOOM,
     DEFAULT_SILENT_SLIDE_SECONDS,
+    DEFAULT_VOICEOVER_TRAIL_SILENCE_SECONDS,
     ENV_PATH,
     OUT_BASE_DIR,
 )
@@ -110,6 +113,21 @@ def _voiceover_wav_path(output_dir: str, slide_idx: int) -> str:
     return os.path.join(output_dir, f"slide_{slide_idx:02d}_voiceover.wav")
 
 
+def _append_silence_to_wav(wav_path: str, duration: float = 3.0) -> None:
+    """Append silence to a WAV file to prevent the last word from cutting off."""
+    with wave.open(wav_path, "rb") as wf:
+        params = wf.getparams()
+        frames = wf.readframes(wf.getnframes())
+
+    nchannels, sampwidth, framerate = params[:3]
+    silence_frame = b"\x00" * sampwidth * nchannels
+    silence_frames = silence_frame * int(framerate * duration)
+
+    with wave.open(wav_path, "wb") as wf:
+        wf.setparams(params)
+        wf.writeframes(frames + silence_frames)
+
+
 def _missing_voiceover_slide_numbers(
     output_dir: str,
     notes_per_slide: List[str],
@@ -141,6 +159,11 @@ def _generate_voiceover_for_slide(
         )
         return None
 
+    # Ensure narration ends with a sentence terminator so Voicebox
+    # produces a natural prosodic ending (last-word cutoff prevention).
+    if narration[-1] not in (".", "!", "?"):
+        narration = narration.rstrip() + "."
+
     wav_path = _voiceover_wav_path(output_dir, slide_idx)
     generate_voicebox_audio(
         narration,
@@ -148,6 +171,12 @@ def _generate_voiceover_for_slide(
         output_wav=wav_path,
         api_base=api_base,
         personality=personality,
+    )
+    # Append a short tail of silence to the WAV so the final word is never
+    # truncated by the playback boundary and voiced slides flow into the
+    # next slide with a natural 1s gap.
+    _append_silence_to_wav(
+        wav_path, duration=DEFAULT_VOICEOVER_TRAIL_SILENCE_SECONDS
     )
     print(f"   ✅ Slide {slide_idx}: saved {wav_path}")
     return wav_path
@@ -245,6 +274,7 @@ def _render_videos(
     output_mp4: Optional[str],
     fps: int,
     inter_slide_pause_seconds: float,
+    ken_burns_zoom: float = 0.0,
 ) -> List[str]:
     ranges = compute_slide_ranges(len(png_paths), split_points)
     created: List[str] = []
@@ -270,6 +300,7 @@ def _render_videos(
             mp4_path,
             fps=fps,
             inter_slide_pause_seconds=inter_slide_pause_seconds,
+            ken_burns_zoom=ken_burns_zoom,
         )
         created.append(os.path.abspath(mp4_path))
     return created
@@ -340,6 +371,7 @@ def main(
     voicebox_url: Optional[str] = None,
     inter_slide_pause_seconds: float = DEFAULT_INTER_SLIDE_PAUSE_SECONDS,
     split_at: Optional[str] = None,
+    ken_burns_zoom: float = 0.0,
 ) -> int:
     try:
         use_personality = (
@@ -429,6 +461,7 @@ def main(
             output_mp4=output_mp4,
             fps=fps,
             inter_slide_pause_seconds=inter_slide_pause_seconds,
+            ken_burns_zoom=ken_burns_zoom,
         )
         if len(created) == 1:
             print(f"\n✅ Video saved: {created[0]}")
@@ -509,8 +542,17 @@ if __name__ == "__main__":
         default=DEFAULT_INTER_SLIDE_PAUSE_SECONDS,
         metavar="SECONDS",
         help=(
-            "Silent hold after each slide before the next (default: "
+            "Silent hold after slides without voiceover; voiced slides "
+            "already carry a built-in trailing silence (default: "
             f"{DEFAULT_INTER_SLIDE_PAUSE_SECONDS}; 0 to disable)"
+        ),
+    )
+    parser.add_argument(
+        "--ken-burns",
+        action="store_true",
+        help=(
+            "Apply iMovie-style Ken Burns zoom/pan to each slide "
+            f"(zoom x{DEFAULT_KEN_BURNS_ZOOM} over the slide duration)"
         ),
     )
     args = parser.parse_args()
@@ -528,5 +570,6 @@ if __name__ == "__main__":
             voicebox_url=args.voicebox_url,
             inter_slide_pause_seconds=args.inter_slide_pause,
             split_at=args.split_at,
+            ken_burns_zoom=DEFAULT_KEN_BURNS_ZOOM if args.ken_burns else 0.0,
         )
     )

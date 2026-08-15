@@ -3,9 +3,14 @@
 from __future__ import annotations
 
 import os
-from typing import List, Optional
+from typing import List, Optional, Tuple
 
-from paths import DEFAULT_FPS, DEFAULT_INTER_SLIDE_PAUSE_SECONDS, DEFAULT_SILENT_SLIDE_SECONDS
+from paths import (
+    DEFAULT_FPS,
+    DEFAULT_INTER_SLIDE_PAUSE_SECONDS,
+    DEFAULT_SILENT_SLIDE_SECONDS,
+    TARGET_IMAGE_SIZE,
+)
 
 AUDIO_CROSSFADE_SECONDS = 0.1
 
@@ -14,16 +19,18 @@ def _import_moviepy():
     try:
         from moviepy.editor import (  # type: ignore[import-untyped]
             AudioFileClip,
+            CompositeVideoClip,
             ImageClip,
             concatenate_videoclips,
         )
     except ImportError:
         from moviepy import (  # type: ignore[import-untyped,no-redef]
             AudioFileClip,
+            CompositeVideoClip,
             ImageClip,
             concatenate_videoclips,
         )
-    return AudioFileClip, ImageClip, concatenate_videoclips
+    return AudioFileClip, ImageClip, concatenate_videoclips, CompositeVideoClip
 
 
 def _clip_set_duration(clip, duration: float):
@@ -62,15 +69,60 @@ def _close_clip(clip) -> None:
         close()
 
 
+def _apply_ken_burns(
+    clip,
+    target_size: Tuple[int, int],
+    zoom: float,
+    pan_ratio: float = 0.5,
+):
+    """Apply a gentle Ken Burns zoom-in + diagonal pan, cropped to target size."""
+    duration = clip.duration or 0.0
+    target_w, target_h = target_size
+    _, _, _, CompositeVideoClip = _import_moviepy()
+
+    def _progress(t: float) -> float:
+        if duration <= 0:
+            return 1.0
+        return min(max(t / duration, 0.0), 1.0)
+
+    def _zoom_at(t: float) -> float:
+        return 1.0 + (zoom - 1.0) * _progress(t)
+
+    def _pos_at(t: float) -> Tuple[float, float]:
+        progress = _progress(t)
+        scale = 1.0 + (zoom - 1.0) * progress
+        img_w = target_w * scale
+        img_h = target_h * scale
+        margin_x = (img_w - target_w) / 2.0
+        margin_y = (img_h - target_h) / 2.0
+        dx = margin_x * pan_ratio * progress
+        dy = margin_y * pan_ratio * progress
+        return ((target_w - img_w) / 2.0 + dx, (target_h - img_h) / 2.0 + dy)
+
+    if hasattr(clip, "resized"):
+        clip = clip.resized(lambda t: _zoom_at(t))
+    else:
+        clip = clip.resize(lambda t: _zoom_at(t))
+
+    if hasattr(clip, "with_position"):
+        clip = clip.with_position(lambda t: _pos_at(t))
+    else:
+        clip = clip.set_position(lambda t: _pos_at(t))
+
+    composite = CompositeVideoClip([clip], size=(int(target_w), int(target_h)))
+    return _clip_set_duration(composite, duration)
+
+
 def build_slide_clip(
     png_path: str,
     wav_path: Optional[str],
     fps: int = DEFAULT_FPS,
     silent_seconds: float = DEFAULT_SILENT_SLIDE_SECONDS,
     trailing_pause_seconds: float = 0.0,
+    ken_burns_zoom: float = 0.0,
 ):
-    """Create one slide sub-clip: static image + optional voiceover audio."""
-    AudioFileClip, ImageClip, _ = _import_moviepy()
+    """Create one slide sub-clip: image (optionally with Ken Burns) + voiceover audio."""
+    AudioFileClip, ImageClip, _, _ = _import_moviepy()
 
     audio_track = None
     video_track = None
@@ -80,12 +132,19 @@ def build_slide_clip(
         if wav_path and os.path.isfile(wav_path):
             audio_track = AudioFileClip(wav_path)
             audio_track = _apply_audio_crossfade(audio_track)
-            duration = audio_track.duration + max(0.0, trailing_pause_seconds)
+            # Voiceover WAVs end with a built-in 1s trailing silence, which
+            # serves as the natural gap before the next slide — don't add a
+            # separate inter-slide pause on top of it.
+            duration = audio_track.duration
         else:
             duration = silent_seconds + max(0.0, trailing_pause_seconds)
 
         video_track = ImageClip(png_path)
         video_track = _clip_set_duration(video_track, duration)
+        if ken_burns_zoom > 0:
+            video_track = _apply_ken_burns(
+                video_track, TARGET_IMAGE_SIZE, ken_burns_zoom
+            )
         if audio_track is not None:
             slide_sub_clip = _clip_set_audio(video_track, audio_track)
             if slide_sub_clip is not video_track:
@@ -114,12 +173,13 @@ def assemble_presentation_video(
     output_mp4: str,
     fps: int = DEFAULT_FPS,
     inter_slide_pause_seconds: float = DEFAULT_INTER_SLIDE_PAUSE_SECONDS,
+    ken_burns_zoom: float = 0.0,
 ) -> str:
-    """Stitch per-slide clips into one MP4."""
+    """Stitch per-slide clips into one MP4, optionally with Ken Burns zoom/pan."""
     if not png_paths:
         raise ValueError("No slide images to assemble")
 
-    _, _, concatenate_videoclips = _import_moviepy()
+    _, _, concatenate_videoclips, _ = _import_moviepy()
 
     slide_clips = []
     audio_handles = []
@@ -134,6 +194,7 @@ def assemble_presentation_video(
                 wav_path,
                 fps=fps,
                 trailing_pause_seconds=trailing_pause,
+                ken_burns_zoom=ken_burns_zoom,
             )
             slide_clips.append(slide_clip)
             if audio_track is not None:

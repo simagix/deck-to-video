@@ -1,3 +1,8 @@
+# System dependencies NOT installable via pip:
+#   - LibreOffice (required for PPTX slide rendering)
+#     macOS: brew install --cask libreoffice
+#     Others: https://www.libreoffice.org/  (ensure `soffice` is on PATH)
+
 # Google Slides API (optional — only needed for Google Slides input)
 google-api-python-client>=2.65.0
 google-auth>=2.0.0

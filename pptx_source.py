@@ -45,14 +45,22 @@ def get_pptx_slide_count(pptx_path: str) -> int:
 
 
 def get_pptx_title(pptx_path: str) -> str:
+    """Return a name for this PPTX deck.
+
+    Many .pptx files carry the generic internal title "PowerPoint Presentation"
+    (the default template), which would make every deck export into the same
+    output folder. So the base filename is preferred unless the internal title
+    is actually descriptive.
+    """
     if not HAS_PPTX:
         raise RuntimeError("python-pptx is required. Install with: pip install python-pptx")
     presentation = Presentation(pptx_path)  # type: ignore[possibly-unbound]
     core_props = presentation.core_properties
     title = (core_props.title or "").strip()
-    if title:
+    base_name = os.path.splitext(os.path.basename(pptx_path))[0] or "pptx_export"
+    if title and title.lower() != "powerpoint presentation":
         return title
-    return os.path.splitext(os.path.basename(pptx_path))[0] or "pptx_export"
+    return base_name
 
 
 def _find_soffice() -> str:
