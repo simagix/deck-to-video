@@ -170,11 +170,15 @@ def narration_plain_for_tts(text: str) -> str:
     )
 
 
-STAGE_DIRECTION_PATTERN = re.compile(r"\[[^\]]*\]|\([^)]*\)")
+STAGE_DIRECTION_PATTERN = re.compile(r"\([^)]*\)")
 
 
 def strip_stage_directions(text: str) -> str:
-    """Remove bracketed/parenthesized stage cues from speaker notes."""
+    """Remove parenthesized asides from speaker notes.
+
+    Bracketed cues such as ``[laugh]`` are intentionally PRESERVED so the TTS
+    engine can interpret them; only ``( ... )`` prose asides are stripped.
+    """
     if not text:
         return text
     cleaned = STAGE_DIRECTION_PATTERN.sub(" ", text)
