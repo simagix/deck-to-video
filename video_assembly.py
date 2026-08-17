@@ -2,7 +2,9 @@
 
 from __future__ import annotations
 
+import math
 import os
+import random
 from typing import List, Optional, Tuple
 
 from paths import (
@@ -95,8 +97,20 @@ def _apply_ken_burns(
         img_h = target_h * scale
         margin_x = (img_w - target_w) / 2.0
         margin_y = (img_h - target_h) / 2.0
-        dx = margin_x * pan_ratio * progress
-        dy = margin_y * pan_ratio * progress
+        # Base random direction for this clip (stored per-slide for variety),
+        # but the pan offsets are computed so the image remains centered
+        # at start (progress=0) and end (progress=1).
+        base_angle = getattr(_pos_at, "base_angle", None)
+        if base_angle is None:
+            base_angle = random.uniform(0, 2 * math.pi)
+            _pos_at.base_angle = base_angle
+        # Tapering factor: zero at progress=0 and progress=1,
+        # peaking in the middle. This keeps the image centered throughout.
+        t = progress
+        taper = math.sin(2 * math.pi * 0.25 * t) * t * (1 - t)
+        # Pan offsets vanish at t=0 and t=1, keeping image centered.
+        dx = margin_x * pan_ratio * taper * math.cos(base_angle)
+        dy = margin_y * pan_ratio * taper * math.sin(base_angle)
         return ((target_w - img_w) / 2.0 + dx, (target_h - img_h) / 2.0 + dy)
 
     if hasattr(clip, "resized"):

@@ -135,8 +135,11 @@ python deck_to_video.py my_deck.pptx --split-at 10,20
 # Adjust video settings
 python deck_to_video.py my_deck.pptx --fps 30 --inter-slide-pause 0.5
 
-# Ken Burns zoom effect on each slide
-python deck_to_video.py my_deck.pptx --ken-burns
+# Ken Burns zoom/pan is applied to each slide by default
+python deck_to_video.py my_deck.pptx
+
+# Render static slides (no Ken Burns motion)
+python deck_to_video.py my_deck.pptx --static
 ```
 
 ### CLI reference
@@ -155,7 +158,7 @@ python deck_to_video.py my_deck.pptx --ken-burns
 | `--split-at N[,N...]` | Split into multiple MP4s at 1-indexed slide numbers |
 | `--fps` | Video frame rate (default: `24`) |
 | `--inter-slide-pause SECONDS` | Silent hold after slides without voiceover (default: `1.0`; voiced slides carry a built-in 1s tail) |
-| `--ken-burns` | Apply iMovie-style slow zoom/pan to each slide (disabled by default) |
+| `--static` | Render each slide as a static image, disabling the default Ken Burns zoom/pan (default: Ken Burns ON, zoom x1.06) |
 
 ## Output
 

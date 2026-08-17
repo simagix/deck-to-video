@@ -390,7 +390,7 @@ def main(
     voicebox_url: Optional[str] = None,
     inter_slide_pause_seconds: float = DEFAULT_INTER_SLIDE_PAUSE_SECONDS,
     split_at: Optional[str] = None,
-    ken_burns_zoom: float = 0.0,
+    ken_burns_zoom: float = DEFAULT_KEN_BURNS_ZOOM,
     engine: Optional[str] = None,
 ) -> int:
     try:
@@ -589,13 +589,15 @@ if __name__ == "__main__":
         ),
     )
     parser.add_argument(
-        "--ken-burns",
+        "--static",
         action="store_true",
         help=(
-            "Apply iMovie-style Ken Burns zoom/pan to each slide "
-            f"(zoom x{DEFAULT_KEN_BURNS_ZOOM} over the slide duration)"
+            "Render each slide as a static image without the default Ken "
+            f"Burns zoom/pan (zoom x{DEFAULT_KEN_BURNS_ZOOM} over the slide "
+            "duration)"
         ),
     )
+
     args = parser.parse_args()
 
     sys.exit(
@@ -611,7 +613,7 @@ if __name__ == "__main__":
             voicebox_url=args.voicebox_url,
             inter_slide_pause_seconds=args.inter_slide_pause,
             split_at=args.split_at,
-            ken_burns_zoom=DEFAULT_KEN_BURNS_ZOOM if args.ken_burns else 0.0,
+            ken_burns_zoom=0.0 if args.static else DEFAULT_KEN_BURNS_ZOOM,
             engine=args.engine,
         )
     )
