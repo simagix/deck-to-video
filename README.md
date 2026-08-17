@@ -5,7 +5,7 @@ Turn a presentation deck into a narrated MP4 video. Export slides and speaker no
 > Google Slides IDs/URLs are also accepted, but PPTX is the recommended and fully documented workflow — see [Google Slides support (optional)](#google-slides-support-optional).
 
 <!-- ADD VISUALIZATION HERE -->
-![A flowchart showing the Deck-to-Video pipeline: input presentation (Google Slides or PPTX), output of extracted images and notes, voiceover processing via Voicebox (optionally with a Cloned Signature Voice Profile UUID and --personality flag), and video assembly by MoviePy, leading to the final 1080p MP4.](deck_to_video.png)
+![A flowchart showing the Deck-to-Video pipeline: input presentation (Google Slides or PPTX), output of extracted images and notes, voiceover processing via Voicebox (optionally with a Cloned Signature Voice Profile UUID and --personality flag), and video assembly by MoviePy, leading to the final 1080p MP4.](workflow_diagram.png)
 
 ## Features
 
