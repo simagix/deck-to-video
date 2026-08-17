@@ -44,6 +44,7 @@ def main() -> int:
 
     dotenv.load_dotenv(ENV_PATH)
     profile_id = os.environ.get("VOICEBOX_PROFILE_ID", "").strip()
+    engine = (os.environ.get("VOICEBOX_ENGINE", "") or "").strip() or None
     api_base = (
         os.environ.get("VOICEBOX_API_URL")
         or os.environ.get("VOICEBOX_URL")
@@ -64,6 +65,8 @@ def main() -> int:
         "profile_id": profile_id,
         "language": "en",
     }
+    if engine:
+        payload["engine"] = engine
     if args.personality:
         # Note: generate_voicebox_audio only adds this when the profile has a
         # personality prompt AND the qwen3 refinement model is downloaded.
@@ -72,6 +75,7 @@ def main() -> int:
     print(f"Notes file  : {args.notes_file}")
     print(f"api_base    : {api_base}")
     print(f"profile_id  : {profile_id or '<NOT SET — no VOICEBOX_PROFILE_ID in .env>'}")
+    print(f"engine      : {engine or '<UNSET — Voicebox uses the profile Default Engine>'}")
     print(f"raw notes   : {len(raw)} chars")
     print(f"after narration prep: {prepared!r}")
     print()

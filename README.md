@@ -56,7 +56,21 @@ Optional overrides:
 
 ```env
 VOICEBOX_API_URL=http://127.0.0.1:17493
+
+# TTS engine used for synthesis (overrides the profile's "Default Engine").
+# Supported: qwen (Qwen3-TTS), qwen_custom_voice, luxtts, chatterbox,
+#            chatterbox_turbo, tada, kokoro
+VOICEBOX_ENGINE=qwen
 ```
+
+> **On "Default Engine" vs. "Refinement model":** these are two different
+> things. The profile's **Default Engine** is the *TTS engine* that actually
+> synthesizes the audio (e.g. `qwen` = Qwen3-TTS). The **Refinement model**
+> (Settings → Captures → Refinement) is a separate small Qwen3 *LLM* that
+> only *rewrites text* for dictation refinement and `--personality` — it never
+> produces audio and does **not** control which engine speaks. So to use
+> Qwen3-TTS, set `VOICEBOX_ENGINE=qwen` (or the profile's default engine); the
+> refinement model is irrelevant to which engine produces the speech.
 
 List available profiles:
 
@@ -98,6 +112,9 @@ python deck_to_video.py my_deck.pptx
 
 # Custom output path
 python deck_to_video.py my_deck.pptx -o presentation.mp4
+
+# Show the installed version
+python deck_to_video.py --version   # deck_to_video v0.2.0
 ```
 
 ### Common options
@@ -129,6 +146,7 @@ python deck_to_video.py my_deck.pptx --ken-burns
 | `source` | Path to a `.pptx` file (Google Slides ID/URL also accepted) |
 | `--profile-id` | Voicebox profile UUID (overrides `.env`) |
 | `--voicebox-url` | Voicebox API base URL (default: `http://127.0.0.1:17493`) |
+| `--engine NAME` | TTS engine, overriding the profile's Default Engine (`qwen`, `qwen_custom_voice`, `luxtts`, `chatterbox`, `chatterbox_turbo`, `tada`, `kokoro`) |
 | `--only-slide N` | Process a single slide (1-based index) |
 | `-o`, `--output` | Output MP4 path |
 | `--export-only` | Export PNGs and notes; skip MP4 assembly |

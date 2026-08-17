@@ -56,6 +56,19 @@ _SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
 if _SCRIPT_DIR not in sys.path:
     sys.path.insert(0, _SCRIPT_DIR)
 
+
+def _read_version() -> str:
+    """Read the version string from the VERSION file next to this script."""
+    version_path = os.path.join(_SCRIPT_DIR, "VERSION")
+    try:
+        with open(version_path, "r", encoding="utf-8") as fh:
+            return fh.read().strip()
+    except OSError:
+        return "unknown"
+
+
+__version__ = _read_version()
+
 import dotenv  # type: ignore[import-untyped]
 import requests  # type: ignore[import-untyped]
 
@@ -86,6 +99,7 @@ from pptx_source import (
 from split_ranges import compute_slide_ranges, parse_split_at, video_label_for_range
 from video_assembly import assemble_presentation_video
 from voicebox_client import (
+    SUPPORTED_ENGINES,
     generate_voicebox_audio,
     get_voicebox_config,
     personality_enabled_from_env,
@@ -150,6 +164,7 @@ def _generate_voiceover_for_slide(
     api_base: str,
     profile_id: str,
     personality: bool,
+    engine: Optional[str] = None,
 ) -> Optional[str]:
     narration = prepare_narration(notes_text, personality=personality)
     if not narration:
@@ -171,6 +186,7 @@ def _generate_voiceover_for_slide(
         output_wav=wav_path,
         api_base=api_base,
         personality=personality,
+        engine=engine,
     )
     # Append a short tail of silence to the WAV so the final word is never
     # truncated by the playback boundary and voiced slides flow into the
@@ -191,6 +207,7 @@ def _voiceover_paths_for_slides(
     personality: bool,
     api_base: Optional[str] = None,
     profile_id: Optional[str] = None,
+    engine: Optional[str] = None,
 ) -> List[Optional[str]]:
     if gen_voiceover:
         if not api_base or not profile_id:
@@ -231,6 +248,7 @@ def _voiceover_paths_for_slides(
                     api_base,
                     profile_id,
                     personality,
+                    engine=engine,
                 )
             )
             continue
@@ -249,6 +267,7 @@ def _voiceover_paths_for_slides(
                     api_base,
                     profile_id,
                     personality,
+                    engine=engine,
                 )
             )
             continue
@@ -372,6 +391,7 @@ def main(
     inter_slide_pause_seconds: float = DEFAULT_INTER_SLIDE_PAUSE_SECONDS,
     split_at: Optional[str] = None,
     ken_burns_zoom: float = 0.0,
+    engine: Optional[str] = None,
 ) -> int:
     try:
         use_personality = (
@@ -381,6 +401,7 @@ def main(
         )
         api_base: Optional[str] = None
         voicebox_profile_id: Optional[str] = None
+        voicebox_engine: Optional[str] = None
 
         split_points: Optional[List[int]] = None
         if split_at:
@@ -431,7 +452,10 @@ def main(
             )
         )
         if needs_voicebox:
-            api_base, voicebox_profile_id = get_voicebox_config(profile_id)
+            api_base, voicebox_profile_id, voicebox_engine = get_voicebox_config(
+                profile_id,
+                engine_override=engine,
+            )
             if voicebox_url:
                 api_base = voicebox_url.rstrip("/")
 
@@ -443,6 +467,7 @@ def main(
             personality=use_personality,
             api_base=api_base,
             profile_id=voicebox_profile_id,
+            engine=voicebox_engine,
         )
         while len(wav_paths) < len(png_paths):
             wav_paths.append(None)
@@ -481,6 +506,12 @@ if __name__ == "__main__":
         description="Export a deck, generate Voicebox narration, and assemble MP4 video(s).",
     )
     parser.add_argument(
+        "--version",
+        action="version",
+        version=f"deck_to_video v{__version__}",
+        help="Show version and exit",
+    )
+    parser.add_argument(
         "source",
         help="Google Slides ID/URL or path to a local .pptx file",
     )
@@ -492,6 +523,16 @@ if __name__ == "__main__":
         "--voicebox-url",
         default=None,
         help="Voicebox API base URL (default: http://127.0.0.1:17493)",
+    )
+    parser.add_argument(
+        "--engine",
+        choices=SUPPORTED_ENGINES,
+        default=None,
+        help=(
+            "TTS engine to use, overriding the profile's Default Engine. "
+            f"One of: {', '.join(SUPPORTED_ENGINES)} (default: the profile's "
+            "Default Engine, or VOICEBOX_ENGINE in .env)"
+        ),
     )
     parser.add_argument(
         "--only-slide",
@@ -571,5 +612,6 @@ if __name__ == "__main__":
             inter_slide_pause_seconds=args.inter_slide_pause,
             split_at=args.split_at,
             ken_burns_zoom=DEFAULT_KEN_BURNS_ZOOM if args.ken_burns else 0.0,
+            engine=args.engine,
         )
     )

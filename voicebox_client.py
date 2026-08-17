@@ -16,6 +16,20 @@ from paths import DEFAULT_VOICEBOX_URL
 _PERSONALITY_FALLBACK_WARNED = False
 _PERSONALITY_LLM_WARMED_API_BASE: Optional[str] = None
 
+# TTS engines Voicebox accepts for the /generate `engine` field. This is the
+# *speech synthesizer* (the profile's "Default Engine"), NOT the refinement
+# LLM used for personality text rewriting.
+SUPPORTED_ENGINES: tuple[str, ...] = (
+    "qwen",              # Qwen3-TTS
+    "qwen_custom_voice", # Qwen CustomVoice (presets + instruct)
+    "luxtts",            # LuxTTS
+    "chatterbox",        # Chatterbox Multilingual
+    "chatterbox_turbo",  # Chatterbox Turbo
+    "tada",              # HumeAI TADA
+    "kokoro",            # Kokoro
+)
+_SUPPORTED_ENGINE_SET = frozenset(SUPPORTED_ENGINES)
+
 
 def _env_bool(name: str, default: bool) -> bool:
     value = os.environ.get(name)
@@ -28,8 +42,15 @@ def personality_enabled_from_env(default: bool = False) -> bool:
     return _env_bool("VOICEBOX_PERSONALITY", default)
 
 
-def get_voicebox_config(profile_id_override: Optional[str] = None) -> tuple[str, str]:
-    """Return (api_base_url, profile_id) from env / CLI."""
+def get_voicebox_config(
+    profile_id_override: Optional[str] = None,
+    engine_override: Optional[str] = None,
+) -> tuple[str, str, Optional[str]]:
+    """Return (api_base_url, profile_id, engine) from env / CLI.
+
+    ``engine`` is ``None`` when neither the CLI nor ``VOICEBOX_ENGINE`` is
+    set, in which case Voicebox uses the profile's own "Default Engine".
+    """
     api_base = (
         os.environ.get("VOICEBOX_API_URL")
         or os.environ.get("VOICEBOX_URL")
@@ -41,7 +62,8 @@ def get_voicebox_config(profile_id_override: Optional[str] = None) -> tuple[str,
             "VOICEBOX_PROFILE_ID is not set. Add it to synth/.env or pass --profile-id. "
             "List profiles with: curl http://127.0.0.1:17493/profiles"
         )
-    return api_base, profile_id
+    engine = (engine_override or os.environ.get("VOICEBOX_ENGINE") or "").strip() or None
+    return api_base, profile_id, engine
 
 
 def _voicebox_refinement_llm_model_size(api_base: str) -> str:
@@ -229,8 +251,13 @@ def generate_voicebox_audio(
     api_base: str = DEFAULT_VOICEBOX_URL,
     timeout: float = 600,
     personality: bool = False,
+    engine: Optional[str] = None,
 ) -> str:
-    """POST narration text to Voicebox /generate and save a .wav file."""
+    """POST narration text to Voicebox /generate and save a .wav file.
+
+    ``engine`` optionally overrides the profile's "Default Engine" (the TTS
+    synthesizer). When ``None``, Voicebox uses the profile's default engine.
+    """
     if not text or not text.strip():
         raise ValueError("Cannot generate audio from empty text")
 
@@ -240,6 +267,14 @@ def generate_voicebox_audio(
         "profile_id": profile_id,
         "language": "en",
     }
+
+    if engine:
+        if engine not in _SUPPORTED_ENGINE_SET:
+            raise ValueError(
+                f"Unknown Voicebox engine {engine!r}. Supported engines: "
+                f"{', '.join(SUPPORTED_ENGINES)}."
+            )
+        payload["engine"] = engine
 
     use_personality = personality
     if use_personality:
