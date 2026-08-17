@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import re
 import unicodedata
-from typing import List
+from typing import List, Optional, Tuple
 
 
 def _strip_control_chars(text: str) -> str:
@@ -170,6 +170,135 @@ def narration_plain_for_tts(text: str) -> str:
     )
 
 
+# ============================================================================
+# Voicebox tone vocabulary — maps short tone names to rich Voicebox ``instruct``
+# instruction strings.  Writers tag their speaker notes with the tone name and
+# the client converts it to the full instruction before hitting /generate.
+# ============================================================================
+TONES: dict[str, str] = {
+    "neutral": "Natural, conversational, balanced delivery.",
+    "professional": "Professional, polished, confident and measured.",
+    "friendly": "Warm, friendly and approachable.",
+    "warm": "Warm, sincere and personable.",
+    "cheerful": "Bright, cheerful and upbeat, with positive energy.",
+    "excited": "Excited and energetic, with genuine enthusiasm.",
+    "enthusiastic": "Highly enthusiastic and engaged, while remaining natural.",
+    "confident": "Confident, assured and authoritative.",
+    "serious": "Serious, deliberate and measured, with appropriate weight.",
+    "concerned": "Concerned and thoughtful, conveying genuine worry.",
+    "frustrated": "Frustrated and exasperated, with noticeable impatience.",
+    "angry": "Angry and forceful, with controlled intensity.",
+    "sad": "Sad, subdued and emotionally restrained.",
+    "disappointed": "Disappointed and slightly dejected, but controlled.",
+    "surprised": "Genuinely surprised, with heightened energy and emphasis.",
+    "confused": "Confused and uncertain, as though trying to understand what happened.",
+    "curious": "Curious, engaged and inquisitive.",
+    "skeptical": "Skeptical and doubtful, with a questioning tone.",
+    "sarcastic": "Sarcastic and mocking, with a sharp edge.",
+    "humorous": "Humorous and playful, with a light-hearted tone.",
+    "witty": "Witty and clever, with a sharp sense of humor.",
+    "dramatic": "Dramatic and intense, with strong emotional delivery.",
+    "mysterious": "Mysterious and enigmatic, with a conspiratorial whisper.",
+    "narrative": "Storytelling narrative, with clear pacing and emphasis.",
+    "explainer": "Clear, explanatory, educational tone—like a teacher.",
+    "whisper": "Soft and intimate, as if whispering to the listener.",
+    "robotic": "Mechanical and flat, with artificial precision.",
+    "urgent": "Urgent and urgent, racing against time.",
+}
+
+
+# A voice/tone tag, one of:
+#   [voice: NAME | tone: TAG]
+#   [voice: NAME]
+#   [tone: TAG]
+# Named groups: voice, tone (from combined), tone_only (from tone-only form).
+_TAG = re.compile(
+    r"\[voice:\s*(?P<voice>[^\]|]+?)(?:\s*\|\s*tone:\s*(?P<tone>\w+))?\s*\]"
+    r"|\[tone:\s*(?P<tone_only>\w+)\s*\]"
+)
+
+
+def _strip_voice_tone_tags(text: str) -> str:
+    """Remove ``[voice: ... | tone: ...]`` / ``[tone: ...]`` tags.
+
+    The tags carry metadata that is consumed separately via the ``instruct``
+    parameter; the raw tag text must never appear in the TTS audio.
+    """
+    if not text:
+        return text
+    stripped = _TAG.sub("", text)
+    stripped = re.sub(r"[ \t]+\n", "\n", stripped)
+    stripped = re.sub(r"\n{3,}", "\n\n", stripped)
+    return stripped.strip()
+
+
+def _tone_instruct(tone_key: Optional[str]) -> Optional[str]:
+    """Return the full Voicebox instruction string for *tone_key*.
+
+    Returns ``None`` when the tone is unknown or unspecified so callers can
+    omit the ``instruct`` field entirely (Voicebox applies the profile default).
+    """
+    if tone_key is None or tone_key not in TONES:
+        return None
+    return TONES[tone_key]
+
+
+def _parse_blocks(notes_text: str) -> List[dict]:
+    """Split speaker notes into voice/tone blocks.
+
+    Each returned dict has keys:
+        - ``voice``  – the named voice (e.g. "Simone"), the previous value
+          when a tag only changes tone, or None if never set.
+        - ``tone``   – the tone keyword, the previous value, or None.
+        - ``text``   – the narration text for this block (tags stripped).
+
+    A ``[voice: ... | tone: ...]``, ``[voice: ...]``, or ``[tone: ...]`` tag
+    begins a new block; everything after it -- including later paragraphs --
+    belongs to that block until the next tag (or end of notes).  A tag that
+    sets only voice or only tone leaves the other dimension sticky from the
+    previous block.  Untagged narration produces a block with voice/tone None
+    (backward compatible with the old behavior).
+    """
+    if not notes_text or not notes_text.strip():
+        return []
+
+    text = notes_text.strip()
+    matches = list(_TAG.finditer(text))
+    if not matches:
+        return [{"voice": None, "tone": None, "text": _collapse_notes(text)}]
+
+    blocks: List[dict] = []
+    last_voice: Optional[str] = None
+    last_tone: Optional[str] = None
+
+    for idx, m in enumerate(matches):
+        if idx == 0 and m.start() > 0:
+            # Leading narration before the first tag -> its own default block.
+            blocks.append(
+                {"voice": None, "tone": None, "text": _collapse_notes(text[: m.start()])}
+            )
+        # Extract whichever fields this tag sets; keep the other sticky.
+        voice = m.group("voice")
+        tone = m.group("tone") or m.group("tone_only")
+        if voice is not None:
+            last_voice = voice.strip()
+        if tone is not None:
+            last_tone = tone.strip().lower()
+        end = matches[idx + 1].start() if idx + 1 < len(matches) else len(text)
+        block_text = _collapse_notes(text[m.end() : end])
+        if block_text:
+            blocks.append({"voice": last_voice, "tone": last_tone, "text": block_text})
+
+    return blocks
+
+
+def _collapse_notes(text: str) -> str:
+    """Collapse internal whitespace/newlines in a narration block, then strip."""
+    if not text:
+        return ""
+    return re.sub(r"\s+", " ", text).strip()
+
+
 STAGE_DIRECTION_PATTERN = re.compile(r"\([^)]*\)")
 
 
@@ -195,7 +324,8 @@ def prepare_narration(raw_notes: str, *, personality: bool = False) -> str:
     """
     if not raw_notes or not raw_notes.strip():
         return ""
-    text = strip_stage_directions(raw_notes)
+    text = _strip_voice_tone_tags(raw_notes)
+    text = strip_stage_directions(text)
     if not text:
         return ""
     if personality:

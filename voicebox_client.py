@@ -252,11 +252,17 @@ def generate_voicebox_audio(
     timeout: float = 600,
     personality: bool = False,
     engine: Optional[str] = None,
+    instruct: Optional[str] = None,
 ) -> str:
     """POST narration text to Voicebox /generate and save a .wav file.
 
     ``engine`` optionally overrides the profile's "Default Engine" (the TTS
     synthesizer). When ``None``, Voicebox uses the profile's default engine.
+
+    ``instruct`` optionally supplies a Voicebox style instruction string
+    (e.g. "Frustrated and exasperated, with noticeable impatience.") that
+    steers the TTS toward a particular tone. Only effective with engines
+    that support style instructions (e.g. Qwen CustomVoice / instruct mode).
     """
     if not text or not text.strip():
         raise ValueError("Cannot generate audio from empty text")
@@ -275,6 +281,9 @@ def generate_voicebox_audio(
                 f"{', '.join(SUPPORTED_ENGINES)}."
             )
         payload["engine"] = engine
+
+    if instruct is not None:
+        payload["instruct"] = instruct
 
     use_personality = personality
     if use_personality:

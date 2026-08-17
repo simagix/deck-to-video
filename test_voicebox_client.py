@@ -173,6 +173,37 @@ class GenerateVoiceboxPayloadTests(unittest.TestCase):
         payload = recorder.generate_payload()
         self.assertNotIn("engine", payload)
 
+    def test_instruct_included_when_set(self):
+        """When an instruct tone is supplied it must be forwarded to /generate."""
+        recorder = _GenerateRequestRecorder()
+        with tempfile.NamedTemporaryFile(suffix=".wav", delete=False) as tmp:
+            out_wav = tmp.name
+        try:
+            with (
+                mock.patch.object(voicebox_client.requests, "get", side_effect=recorder.get),
+                mock.patch.object(voicebox_client.requests, "post", side_effect=recorder.post),
+            ):
+                voicebox_client.generate_voicebox_audio(
+                    text=RAW_NOTES,
+                    profile_id=PROFILE_ID,
+                    output_wav=out_wav,
+                    api_base=API_BASE,
+                    instruct="Frustrated and exasperated, with noticeable impatience.",
+                )
+        finally:
+            if os.path.exists(out_wav):
+                os.remove(out_wav)
+        payload = recorder.generate_payload()
+        self.assertEqual(
+            payload["instruct"], "Frustrated and exasperated, with noticeable impatience."
+        )
+
+    def test_instruct_omitted_when_unset(self):
+        """When no instruct is supplied the payload must NOT include it."""
+        recorder = self._run_generate(personality=False, text=RAW_NOTES)
+        payload = recorder.generate_payload()
+        self.assertNotIn("instruct", payload)
+
     def test_unsupported_engine_raises(self):
         """An unknown engine should fail fast with a clear message."""
         with self.assertRaises(ValueError):

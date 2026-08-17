@@ -80,7 +80,7 @@ from google_slides import (
     get_presentation_title,
     get_skipped_slide_indices,
 )
-from narration import prepare_narration
+from narration import _parse_blocks, _tone_instruct, prepare_narration
 from paths import (
     DEFAULT_FPS,
     DEFAULT_INTER_SLIDE_PAUSE_SECONDS,
@@ -174,6 +174,18 @@ def _generate_voiceover_for_slide(
         )
         return None
 
+    # Parse voice/tone tags from the notes. Use the first tone found across any
+    # block as the instruct for Voicebox style guidance (a tone-only tag such as
+    # "[tone: frustrated]" may appear after leading narration, so it can live in
+    # a later block).
+    blocks = _parse_blocks(notes_text)
+    instruct: Optional[str] = None
+    for block in blocks:
+        if block.get("tone"):
+            instruct = _tone_instruct(block["tone"])
+            if instruct:
+                break
+
     # Ensure narration ends with a sentence terminator so Voicebox
     # produces a natural prosodic ending (last-word cutoff prevention).
     if narration[-1] not in (".", "!", "?"):
@@ -187,6 +199,7 @@ def _generate_voiceover_for_slide(
         api_base=api_base,
         personality=personality,
         engine=engine,
+        instruct=instruct,
     )
     # Append a short tail of silence to the WAV so the final word is never
     # truncated by the playback boundary and voiced slides flow into the

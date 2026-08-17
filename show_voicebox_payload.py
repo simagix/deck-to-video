@@ -18,7 +18,7 @@ import sys
 
 import dotenv  # type: ignore[import-untyped]
 
-from narration import prepare_narration
+from narration import _parse_blocks, _tone_instruct, prepare_narration
 from paths import ENV_PATH
 
 _SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
@@ -60,6 +60,16 @@ def main() -> int:
         print("⚠️  prepare_narration returned empty text (nothing would be sent).")
         return 1
 
+    # Extract tone instruct from voice/tone tags (mirrors deck_to_video.py).
+    # Use the first tone found across any block.
+    blocks = _parse_blocks(raw)
+    instruct = None
+    for block in blocks:
+        if block.get("tone"):
+            instruct = _tone_instruct(block["tone"])
+            if instruct:
+                break
+
     payload: dict[str, object] = {
         "text": prepared,
         "profile_id": profile_id,
@@ -71,6 +81,8 @@ def main() -> int:
         # Note: generate_voicebox_audio only adds this when the profile has a
         # personality prompt AND the qwen3 refinement model is downloaded.
         payload["personality"] = True
+    if instruct is not None:
+        payload["instruct"] = instruct
 
     print(f"Notes file  : {args.notes_file}")
     print(f"api_base    : {api_base}")

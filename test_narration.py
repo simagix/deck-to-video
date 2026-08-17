@@ -54,5 +54,125 @@ class PrepareNarrationTests(unittest.TestCase):
         self.assertIn("C-L-I", out)
 
 
+class VoiceToneTagParsingTests(unittest.TestCase):
+    def test_remove_voice_tone_tags_strips_all_tags(self):
+        notes = (
+            "[voice: Simone | tone: neutral]\n\n"
+            "Welcome everyone.\n\n"
+            "[voice: Alex | tone: cheerful]\n\n"
+            "And I have some good news."
+        )
+        stripped = narration._strip_voice_tone_tags(notes)
+        self.assertNotIn("[voice:", stripped)
+        self.assertNotIn("tone:", stripped)
+        self.assertNotIn("Simone", stripped)
+        self.assertNotIn("Alex", stripped)
+        self.assertIn("Welcome everyone.", stripped)
+        self.assertIn("And I have some good news.", stripped)
+
+    def test_parse_blocks_produces_expected_blocks(self):
+        notes = (
+            "[voice: Simone | tone: neutral]\n\n"
+            "Welcome everyone.\n\n"
+            "[voice: Alex | tone: cheerful]\n\n"
+            "And I have some good news."
+        )
+        blocks = narration._parse_blocks(notes)
+        self.assertEqual(len(blocks), 2)
+        self.assertEqual(blocks[0]["voice"], "Simone")
+        self.assertEqual(blocks[0]["tone"], "neutral")
+        self.assertEqual(blocks[0]["text"], "Welcome everyone.")
+        self.assertEqual(blocks[1]["voice"], "Alex")
+        self.assertEqual(blocks[1]["tone"], "cheerful")
+        self.assertEqual(blocks[1]["text"], "And I have some good news.")
+
+    def test_tone_only_tag(self):
+        """A lone [tone: frustrated] tag (no voice) must set tone and be stripped."""
+        notes = (
+            "Hi... I'm Simone... the Hatchet assistant.\n"
+            "[tone: frustrated]\n"
+            "My typical workday begins long... before I even log on."
+        )
+        blocks = narration._parse_blocks(notes)
+        # Leading untagged narration is its own block; the tag starts block 2.
+        self.assertEqual(len(blocks), 2)
+        self.assertIsNone(blocks[0]["tone"])
+        self.assertEqual(blocks[0]["text"], "Hi... I'm Simone... the Hatchet assistant.")
+        self.assertEqual(blocks[1]["tone"], "frustrated")
+        self.assertEqual(
+            blocks[1]["text"], "My typical workday begins long... before I even log on."
+        )
+        # The tag must be stripped from the narration text sent to TTS.
+        stripped = narration.prepare_narration(notes)
+        self.assertNotIn("[tone:", stripped)
+        self.assertNotIn("frustrated", stripped)
+        # And the tone must map to the full instruct.
+        self.assertEqual(
+            narration._tone_instruct(blocks[1]["tone"]),
+            "Frustrated and exasperated, with noticeable impatience.",
+        )
+
+    def test_voice_only_tag_keeps_tone_sticky(self):
+        """[voice: Alex] alone should keep the previous tone sticky."""
+        notes = (
+            "[voice: Simone | tone: neutral]\n"
+            "First speaker.\n\n"
+            "[voice: Alex]\n"
+            "Second speaker stays neutral."
+        )
+        blocks = narration._parse_blocks(notes)
+        self.assertEqual(len(blocks), 2)
+        self.assertEqual(blocks[1]["voice"], "Alex")
+        self.assertEqual(blocks[1]["tone"], "neutral")  # tone stuck from block 1
+
+    def test_sticky_voice_tone_across_paragraphs(self):
+        notes = (
+            "[voice: Simone | tone: neutral]\n\n"
+            "Welcome to today's presentation.\n\n"
+            "This is an important topic.\n\n"
+            "[voice: Alex | tone: excited]\n\n"
+            "And here's where things get interesting!"
+        )
+        blocks = narration._parse_blocks(notes)
+        self.assertEqual(len(blocks), 2)
+        # Both untagged paragraphs stick to Simone/neutral.
+        self.assertIn("Welcome to today's presentation.", blocks[0]["text"])
+        self.assertIn("This is an important topic.", blocks[0]["text"])
+        self.assertEqual(blocks[0]["voice"], "Simone")
+        self.assertEqual(blocks[0]["tone"], "neutral")
+        self.assertEqual(blocks[1]["voice"], "Alex")
+        self.assertEqual(blocks[1]["tone"], "excited")
+
+    def test_no_tags_backward_compatible(self):
+        notes = "Just some plain presentation notes."
+        blocks = narration._parse_blocks(notes)
+        self.assertEqual(len(blocks), 1)
+        self.assertIsNone(blocks[0]["voice"])
+        self.assertIsNone(blocks[0]["tone"])
+        self.assertEqual(blocks[0]["text"], "Just some plain presentation notes.")
+        # prepare_narration is unchanged by the tags feature.
+        self.assertEqual(
+            narration.prepare_narration(notes), "Just some plain presentation notes."
+        )
+
+    def test_tone_instruct_mapping(self):
+        self.assertEqual(
+            narration._tone_instruct("frustrated"),
+            "Frustrated and exasperated, with noticeable impatience.",
+        )
+        self.assertEqual(
+            narration._tone_instruct("sarcastic"),
+            "Sarcastic and mocking, with a sharp edge.",
+        )
+        self.assertIsNone(narration._tone_instruct(None))
+        self.assertIsNone(narration._tone_instruct("not-a-real-tone"))
+
+    def test_all_tones_present_and_nonempty(self):
+        self.assertEqual(len(narration.TONES), 28)
+        for tone, instruction in narration.TONES.items():
+            self.assertTrue(tone.strip())
+            self.assertTrue(instruction.strip())
+
+
 if __name__ == "__main__":
     unittest.main(verbosity=2)
