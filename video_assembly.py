@@ -11,6 +11,7 @@ from paths import (
     DEFAULT_FPS,
     DEFAULT_INTER_SLIDE_PAUSE_SECONDS,
     DEFAULT_SILENT_SLIDE_SECONDS,
+    KEN_BURNS_IMAGE_SIZE,
     TARGET_IMAGE_SIZE,
 )
 
@@ -71,15 +72,13 @@ def _close_clip(clip) -> None:
         close()
 
 
-def _apply_ken_burns(
-    clip,
-    target_size: Tuple[int, int],
-    zoom: float,
-    pan_ratio: float = 0.5,
-):
+def _apply_ken_burns(clip, target_size: Tuple[int, int], zoom: float, pan_ratio: float = 0.5, index: int = 0):
     """Apply a gentle Ken Burns zoom-in + diagonal pan, cropped to target size."""
     duration = clip.duration or 0.0
     target_w, target_h = target_size
+    zoom_out = False
+    if index % 2 == 0:
+        zoom_out = True
     _, _, _, CompositeVideoClip = _import_moviepy()
 
     def _progress(t: float) -> float:
@@ -87,8 +86,13 @@ def _apply_ken_burns(
             return 1.0
         return min(max(t / duration, 0.0), 1.0)
 
-    def _zoom_at(t: float) -> float:
+    # zoom in
+    def _zoom_in_at(t: float) -> float:
         return 1.0 + (zoom - 1.0) * _progress(t)
+
+    # zoom out (for testing)
+    def _zoom_out_at(t: float) -> float:
+        return zoom - (zoom - 1.0) * _progress(t)
 
     def _pos_at(t: float) -> Tuple[float, float]:
         progress = _progress(t)
@@ -114,9 +118,15 @@ def _apply_ken_burns(
         return ((target_w - img_w) / 2.0 + dx, (target_h - img_h) / 2.0 + dy)
 
     if hasattr(clip, "resized"):
-        clip = clip.resized(lambda t: _zoom_at(t))
+        if zoom_out:
+            clip = clip.resized(lambda t: _zoom_out_at(t))
+        else:
+            clip = clip.resized(lambda t: _zoom_in_at(t))
     else:
-        clip = clip.resize(lambda t: _zoom_at(t))
+        if zoom_out:   
+            clip = clip.resize(lambda t: _zoom_out_at(t))
+        else:
+            clip = clip.resize(lambda t: _zoom_in_at(t))
 
     if hasattr(clip, "with_position"):
         clip = clip.with_position(lambda t: _pos_at(t))
@@ -134,6 +144,7 @@ def build_slide_clip(
     silent_seconds: float = DEFAULT_SILENT_SLIDE_SECONDS,
     trailing_pause_seconds: float = 0.0,
     ken_burns_zoom: float = 0.0,
+    index: int = 0
 ):
     """Create one slide sub-clip: image (optionally with Ken Burns) + voiceover audio."""
     AudioFileClip, ImageClip, _, _ = _import_moviepy()
@@ -157,7 +168,7 @@ def build_slide_clip(
         video_track = _clip_set_duration(video_track, duration)
         if ken_burns_zoom > 0:
             video_track = _apply_ken_burns(
-                video_track, TARGET_IMAGE_SIZE, ken_burns_zoom
+                video_track, KEN_BURNS_IMAGE_SIZE, ken_burns_zoom, index=index
             )
         if audio_track is not None:
             slide_sub_clip = _clip_set_audio(video_track, audio_track)
@@ -209,6 +220,7 @@ def assemble_presentation_video(
                 fps=fps,
                 trailing_pause_seconds=trailing_pause,
                 ken_burns_zoom=ken_burns_zoom,
+                index = idx,
             )
             slide_clips.append(slide_clip)
             if audio_track is not None:

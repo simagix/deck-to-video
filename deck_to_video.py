@@ -33,6 +33,7 @@ USAGE:
     python deck_to_video.py <id> --split-at 10,20
     python deck_to_video.py <id> -o my_deck.mp4
     python deck_to_video.py <id> --export-only
+    python deck_to_video.py <id> --ken-burns     # add Ken Burns zoom/pan
 
 OUTPUT:
 =======
@@ -601,13 +602,24 @@ if __name__ == "__main__":
             f"{DEFAULT_INTER_SLIDE_PAUSE_SECONDS}; 0 to disable)"
         ),
     )
-    parser.add_argument(
+    ken_burns_group = parser.add_mutually_exclusive_group()
+    ken_burns_group.add_argument(
         "--static",
         action="store_true",
         help=(
-            "Render each slide as a static image without the default Ken "
-            f"Burns zoom/pan (zoom x{DEFAULT_KEN_BURNS_ZOOM} over the slide "
+            "[deprecated] Render slides as static images. This is now the "
+            "default behaviour; use --ken-burns to enable the Ken Burns "
+            f"zoom/pan (zoom x{DEFAULT_KEN_BURNS_ZOOM} over the slide "
             "duration)"
+        ),
+    )
+    ken_burns_group.add_argument(
+        "--ken-burns",
+        action="store_true",
+        help=(
+            "Apply the Ken Burns zoom/pan effect to each slide "
+            f"(zoom x{DEFAULT_KEN_BURNS_ZOOM} over the slide duration). "
+            "By default slides are rendered as static images."
         ),
     )
 
@@ -626,7 +638,7 @@ if __name__ == "__main__":
             voicebox_url=args.voicebox_url,
             inter_slide_pause_seconds=args.inter_slide_pause,
             split_at=args.split_at,
-            ken_burns_zoom=0.0 if args.static else DEFAULT_KEN_BURNS_ZOOM,
+            ken_burns_zoom=DEFAULT_KEN_BURNS_ZOOM if args.ken_burns else 0.0,
             engine=args.engine,
         )
     )
