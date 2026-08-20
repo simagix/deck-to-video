@@ -233,7 +233,15 @@ def assemble_presentation_video(
             if audio_track is not None:
                 audio_handles.append(audio_track)
 
-        final_movie = concatenate_videoclips(slide_clips, method="compose")
+        # Every slide clip is rendered at the same fixed size (either the target
+        # size for static slides or KEN_BURNS_IMAGE_SIZE for Ken Burns slides),
+        # so 'chain' concatenation is safe: it passes each clip's frame straight
+        # through. We must NOT use method='compose' here: compose re-centers each
+        # already-cropped clip in a new composite with with_position('center'),
+        # and that Pillow re-composite corrupts the most-zoomed-in frames of the
+        # Ken Burns clips, exposing a black band on the pan side (observed on the
+        # last zoom-in frame of slide 5).
+        final_movie = concatenate_videoclips(slide_clips, method="chain")
         print(f"\n📼 Rendering {output_mp4} ...")
         final_movie.write_videofile(
             output_mp4,
