@@ -72,61 +72,68 @@ def _close_clip(clip) -> None:
         close()
 
 
+def _smoothstep(t: float) -> float:
+    """Classic ease-in/out 'smoothstep', remapping [0,1] -> [0,1].
+
+    Gently lifts (zero velocity) at t=0 and settles (zero velocity) at t=1,
+    with continuous speed in between.  This is the curve iMovie's Ken Burns
+    pans are built on; a plain linear ramp starts/stops abruptly and reads as
+    twitchy / 'shaky'.
+    """
+    t = max(0.0, min(t, 1.0))
+    return t * t * (3.0 - 2.0 * t)
+
+
 def _apply_ken_burns(clip, target_size: Tuple[int, int], zoom: float, pan_ratio: float = 0.5, index: int = 0):
-    """Apply a gentle Ken Burns zoom-in + diagonal pan, cropped to target size."""
+    """Apply an iMovie-style smooth Ken Burns zoom + pan, cropped to target size.
+
+    This models a single coherent camera move: the window slides along one
+    constant direction while zooming, and BOTH the zoom and the pan are driven
+    by the SAME smoothstep easing curve. A shared eased parameter keeps the
+    motion coherent and free of the old 'drift out and back' taper
+    (``sin(pi/2*t)*t*(1-t)``) that made slides rock/sway instead of panning.
+    """
     duration = clip.duration or 0.0
     target_w, target_h = target_size
-    zoom_out = False
-    if index % 2 == 0:
-        zoom_out = True
-    _, _, _, CompositeVideoClip = _import_moviepy()
+
+    # Alternate zoom-in / zoom-out per slide for variety (as before).
+    zoom_out = index % 2 == 0
+    start_scale = zoom if zoom_out else 1.0
+    end_scale = 1.0 if zoom_out else zoom
+
+    # One pan heading per slide; both axes follow it (no mid-pan reversal).
+    pan_angle = random.uniform(0, 2 * math.pi)
 
     def _progress(t: float) -> float:
         if duration <= 0:
             return 1.0
         return min(max(t / duration, 0.0), 1.0)
 
-    # zoom in
-    def _zoom_in_at(t: float) -> float:
-        return 1.0 + (zoom - 1.0) * _progress(t)
-
-    # zoom out (for testing)
-    def _zoom_out_at(t: float) -> float:
-        return zoom - (zoom - 1.0) * _progress(t)
+    def _zoom_at(t: float) -> float:
+        e = _smoothstep(_progress(t))
+        return start_scale + (end_scale - start_scale) * e
 
     def _pos_at(t: float) -> Tuple[float, float]:
-        progress = _progress(t)
-        scale = 1.0 + (zoom - 1.0) * progress
+        e = _smoothstep(_progress(t))
+        scale = start_scale + (end_scale - start_scale) * e
         img_w = target_w * scale
         img_h = target_h * scale
         margin_x = (img_w - target_w) / 2.0
         margin_y = (img_h - target_h) / 2.0
-        # Base random direction for this clip (stored per-slide for variety),
-        # but the pan offsets are computed so the image remains centered
-        # at start (progress=0) and end (progress=1).
-        base_angle = getattr(_pos_at, "base_angle", None)
-        if base_angle is None:
-            base_angle = random.uniform(0, 2 * math.pi)
-            _pos_at.base_angle = base_angle
-        # Tapering factor: zero at progress=0 and progress=1,
-        # peaking in the middle. This keeps the image centered throughout.
-        t = progress
-        taper = math.sin(2 * math.pi * 0.25 * t) * t * (1 - t)
-        # Pan offsets vanish at t=0 and t=1, keeping image centered.
-        dx = margin_x * pan_ratio * taper * math.cos(base_angle)
-        dy = margin_y * pan_ratio * taper * math.sin(base_angle)
+        # Monotonic pan along a single heading, eased with the same curve as
+        # the zoom. `2*e - 1` sweeps from -1 (start) to +1 (end), so the window
+        # translates from one edge toward the other — no 'there and back' sway.
+        pan = 2.0 * e - 1.0
+        dx = margin_x * pan_ratio * pan * math.cos(pan_angle)
+        dy = margin_y * pan_ratio * pan * math.sin(pan_angle)
         return ((target_w - img_w) / 2.0 + dx, (target_h - img_h) / 2.0 + dy)
 
+    _, _, _, CompositeVideoClip = _import_moviepy()
+
     if hasattr(clip, "resized"):
-        if zoom_out:
-            clip = clip.resized(lambda t: _zoom_out_at(t))
-        else:
-            clip = clip.resized(lambda t: _zoom_in_at(t))
+        clip = clip.resized(lambda t: _zoom_at(t))
     else:
-        if zoom_out:   
-            clip = clip.resize(lambda t: _zoom_out_at(t))
-        else:
-            clip = clip.resize(lambda t: _zoom_in_at(t))
+        clip = clip.resize(lambda t: _zoom_at(t))
 
     if hasattr(clip, "with_position"):
         clip = clip.with_position(lambda t: _pos_at(t))
