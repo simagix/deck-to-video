@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import re
 import unicodedata
-from typing import List, Optional, Tuple
+from typing import AbstractSet, List, Optional, Tuple
 
 
 def _strip_control_chars(text: str) -> str:
@@ -217,6 +217,109 @@ _TAG = re.compile(
     r"|\[tone:\s*(?P<tone_only>\w+)\s*\]"
 )
 
+# A punchline sound-effect tag, e.g. "[sfx: rimshot]" — plus bare aliases
+# like "[badumtss]". Stripped from TTS text; resolved by ``parse_sfx_cues``.
+_SFX_TAG = re.compile(
+    r"\[\s*sfx:\s*(?P<name>[A-Za-z0-9_\- ]+?)\s*\]"
+    r"|\[\s*(?P<alias>badumtss|rimshot|ba[\s_\-]?dum[\s_\-]?tss)\s*\]",
+    re.IGNORECASE,
+)
+
+#: Canonical sound-effect names; tag spellings normalize to these keys.
+SFX_ALIASES = {
+    "rimshot": "rimshot",
+    "badumtss": "rimshot",
+}
+
+
+def _canonical_sfx_name(raw: str) -> Optional[str]:
+    """Map a tag spelling ('Ba Dum Tss', 'rim-shot', …) to its canonical name."""
+    return SFX_ALIASES.get(re.sub(r"[\s_\-]+", "", raw.lower()))
+
+
+def _strip_sfx_tags(text: str) -> str:
+    """Remove ``[sfx: ...]`` / ``[badumtss]`` punchline effect tags.
+
+    The tags trigger sound-effect mixing at voiceover-generation time (see
+    ``sfx.overlay_sfx_on_wav``); the raw tag text must never reach the TTS.
+    """
+    if not text:
+        return text
+    stripped = _SFX_TAG.sub("", text)
+    stripped = re.sub(r"[ \t]+\n", "\n", stripped)
+    stripped = re.sub(r"[ \t]{2,}", " ", stripped)
+    return stripped.strip()
+
+
+def parse_sfx_cues(notes_text: str) -> List[str]:
+    """Return recognized sound effects requested by *notes_text*, in order.
+
+    Recognizes ``[sfx: NAME]`` plus bare aliases such as ``[badumtss]``
+    or ``[ba dum tss]``. Unknown names are ignored (but still stripped from
+    TTS text), so typos never leak into narration.
+    """
+    cues: List[str] = []
+    for match in _SFX_TAG.finditer(notes_text or ""):
+        raw = match.group("name")
+        if raw is None:
+            raw = match.group("alias")
+        canonical = _canonical_sfx_name(raw)
+        if canonical and canonical not in cues:
+            cues.append(canonical)
+    return cues
+
+
+def split_notes_on_sfx(
+    notes_text: str,
+    supported: Optional[AbstractSet[str]] = None,
+) -> List[dict]:
+    """Split speaker notes into narration takes interleaved with SFX cues.
+
+    Recognized sound-effect tags act as split points; everything between two
+    tags (including any ``[voice: ... | tone: ...]`` markers) stays together
+    as one narration take, so each take can carry its own tone instruct.
+
+    Returns an ordered list of dicts:
+        - ``{"kind": "narration", "source": <raw notes substring>}``
+        - ``{"kind": "sfx", "name": <canonical sfx name>}``
+
+    Unrecognized SFX names are left inside the surrounding take (they are
+    stripped from the TTS text later); recognized ones always split.
+    Notes without any recognized cue yield a single narration part covering
+    the whole text (backward compatible).
+    """
+    if not notes_text or not notes_text.strip():
+        return []
+
+    allowed = set(supported) if supported is not None else set(SFX_ALIASES.values())
+
+    # Collect split positions for recognized SFX cues only; voice/tone tags
+    # stay embedded within their take's raw source text.
+    splits: List[Tuple[int, int, str]] = []
+    for match in _SFX_TAG.finditer(notes_text):
+        raw = match.group("name")
+        if raw is None:
+            raw = match.group("alias")
+        canonical = _canonical_sfx_name(raw)
+        if canonical in allowed:
+            splits.append((match.start(), match.end(), canonical))
+
+    if not splits:
+        return [{"kind": "narration", "source": notes_text}]
+
+    parts: List[dict] = []
+    cursor = 0
+    for start, end, name in splits:
+        source = notes_text[cursor:start]
+        if source.strip():
+            parts.append({"kind": "narration", "source": source})
+        parts.append({"kind": "sfx", "name": name})
+        cursor = end
+    tail = notes_text[cursor:]
+    if tail.strip():
+        parts.append({"kind": "narration", "source": tail})
+    return parts
+
 
 def _strip_voice_tone_tags(text: str) -> str:
     """Remove ``[voice: ... | tone: ...]`` / ``[tone: ...]`` tags.
@@ -241,6 +344,20 @@ def _tone_instruct(tone_key: Optional[str]) -> Optional[str]:
     if tone_key is None or tone_key not in TONES:
         return None
     return TONES[tone_key]
+
+
+def _first_tone_instruct(source: str) -> Optional[str]:
+    """First usable Voicebox tone instruct found in *source* notes, else None.
+
+    A tone-only tag such as ``[tone: frustrated]`` may appear after leading
+    narration, so it can live in a later block.
+    """
+    for block in _parse_blocks(source):
+        if block.get("tone"):
+            instruct = _tone_instruct(block["tone"])
+            if instruct:
+                return instruct
+    return None
 
 
 def _parse_blocks(notes_text: str) -> List[dict]:
@@ -325,6 +442,7 @@ def prepare_narration(raw_notes: str, *, personality: bool = False) -> str:
     if not raw_notes or not raw_notes.strip():
         return ""
     text = _strip_voice_tone_tags(raw_notes)
+    text = _strip_sfx_tags(text)
     text = strip_stage_directions(text)
     if not text:
         return ""

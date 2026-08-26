@@ -50,8 +50,9 @@ import argparse
 import os
 import re
 import sys
+import tempfile
 import wave
-from typing import List, Optional
+from typing import List, Optional, Tuple
 
 _SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
 if _SCRIPT_DIR not in sys.path:
@@ -81,7 +82,13 @@ from google_slides import (
     get_presentation_title,
     get_skipped_slide_indices,
 )
-from narration import _parse_blocks, _tone_instruct, prepare_narration
+from narration import (
+    _first_tone_instruct,
+    _parse_blocks,
+    _tone_instruct,
+    prepare_narration,
+    split_notes_on_sfx,
+)
 from paths import (
     DEFAULT_FPS,
     DEFAULT_INTER_SLIDE_PAUSE_SECONDS,
@@ -98,6 +105,7 @@ from pptx_source import (
     is_pptx_path,
 )
 from split_ranges import compute_slide_ranges, parse_split_at, video_label_for_range
+from sfx import SFX_SAMPLES, assemble_voiceover
 from video_assembly import assemble_presentation_video
 from voicebox_client import (
     SUPPORTED_ENGINES,
@@ -158,6 +166,37 @@ def _missing_voiceover_slide_numbers(
     return missing
 
 
+def _ensure_terminal_punctuation(text: str) -> str:
+    """End narration with a sentence terminator so Voicebox closes its prosody."""
+    if text[-1] not in (".", "!", "?"):
+        return text.rstrip() + "."
+    return text
+
+
+def _generate_voiceover_take(
+    source: str,
+    output_wav: str,
+    api_base: str,
+    profile_id: str,
+    personality: bool,
+    engine: Optional[str],
+) -> bool:
+    """Synthesize one narration take via Voicebox; False when nothing to say."""
+    narration_text = prepare_narration(source, personality=personality)
+    if not narration_text.strip():
+        return False
+    generate_voicebox_audio(
+        _ensure_terminal_punctuation(narration_text),
+        profile_id=profile_id,
+        output_wav=output_wav,
+        api_base=api_base,
+        personality=personality,
+        engine=engine,
+        instruct=_first_tone_instruct(source),
+    )
+    return True
+
+
 def _generate_voiceover_for_slide(
     output_dir: str,
     slide_idx: int,
@@ -167,47 +206,58 @@ def _generate_voiceover_for_slide(
     personality: bool,
     engine: Optional[str] = None,
 ) -> Optional[str]:
-    narration = prepare_narration(notes_text, personality=personality)
-    if not narration:
+    if not prepare_narration(notes_text, personality=personality):
         print(
             f"   ⏭️  Slide {slide_idx}: no narration "
             f"(will use {DEFAULT_SILENT_SLIDE_SECONDS}s silent)"
         )
         return None
 
-    # Parse voice/tone tags from the notes. Use the first tone found across any
-    # block as the instruct for Voicebox style guidance (a tone-only tag such as
-    # "[tone: frustrated]" may appear after leading narration, so it can live in
-    # a later block).
-    blocks = _parse_blocks(notes_text)
-    instruct: Optional[str] = None
-    for block in blocks:
-        if block.get("tone"):
-            instruct = _tone_instruct(block["tone"])
-            if instruct:
-                break
-
-    # Ensure narration ends with a sentence terminator so Voicebox
-    # produces a natural prosodic ending (last-word cutoff prevention).
-    if narration[-1] not in (".", "!", "?"):
-        narration = narration.rstrip() + "."
-
     wav_path = _voiceover_wav_path(output_dir, slide_idx)
-    generate_voicebox_audio(
-        narration,
-        profile_id=profile_id,
-        output_wav=wav_path,
-        api_base=api_base,
-        personality=personality,
-        engine=engine,
-        instruct=instruct,
-    )
-    # Append a short tail of silence to the WAV so the final word is never
-    # truncated by the playback boundary and voiced slides flow into the
-    # next slide with a natural 1s gap.
-    _append_silence_to_wav(
-        wav_path, duration=DEFAULT_VOICEOVER_TRAIL_SILENCE_SECONDS
-    )
+    parts = split_notes_on_sfx(notes_text, supported=set(SFX_SAMPLES))
+
+    if not any(part["kind"] == "sfx" for part in parts):
+        # Single-take path (no sound-effect cues): one Voicebox call, exactly
+        # as before. The take keeps the first tone found anywhere in the notes.
+        if not _generate_voiceover_take(
+            notes_text, wav_path, api_base, profile_id, personality, engine
+        ):
+            print(f"   ⏭️  Slide {slide_idx}: no narration after prep")
+            return None
+        # Append a short tail of silence so the final word is never truncated
+        # and voiced slides flow into the next with a natural 1s gap.
+        _append_silence_to_wav(
+            wav_path, duration=DEFAULT_VOICEOVER_TRAIL_SILENCE_SECONDS
+        )
+        print(f"   ✅ Slide {slide_idx}: saved {wav_path}")
+        return wav_path
+
+    # Multi-take path: each recognized "[sfx: ...]" tag splits the notes into
+    # separate takes. The sample is spliced between them — landing exactly
+    # where the tag sat, even mid-slide — and each take keeps its own
+    # [voice:/tone:] context as its style instruct.
+    pieces: List[Tuple[str, str]] = []
+    inserted: List[str] = []
+    take_no = 0
+    with tempfile.TemporaryDirectory(prefix=f"slide_{slide_idx:02d}_sfx_") as tmp_dir:
+        for part in parts:
+            if part["kind"] == "sfx":
+                pieces.append(("sfx", part["name"]))
+                continue
+            take_no += 1
+            take_path = os.path.join(tmp_dir, f"take_{take_no:02d}.wav")
+            if _generate_voiceover_take(
+                part["source"],
+                take_path,
+                api_base,
+                profile_id,
+                personality,
+                engine,
+            ):
+                pieces.append(("wav", take_path))
+        inserted = assemble_voiceover(pieces, wav_path)
+    for name in inserted:
+        print(f"   🥁 Slide {slide_idx}: {name} mid-slide")
     print(f"   ✅ Slide {slide_idx}: saved {wav_path}")
     return wav_path
 

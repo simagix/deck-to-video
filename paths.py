@@ -14,6 +14,10 @@ DEFAULT_VOICEBOX_URL = "http://127.0.0.1:17493"
 DEFAULT_SILENT_SLIDE_SECONDS = 3.0
 DEFAULT_INTER_SLIDE_PAUSE_SECONDS = 1.0
 DEFAULT_VOICEOVER_TRAIL_SILENCE_SECONDS = 1.0
+# Punchline sound effects ([sfx: rimshot]): comedic beat between the last
+# spoken word and the hit, and how loud the sample plays relative to speech.
+DEFAULT_SFX_BEAT_SECONDS = 0.25
+DEFAULT_SFX_GAIN = 0.9
 DEFAULT_FPS = 24
 DEFAULT_KEN_BURNS_ZOOM = 1.15
 TARGET_IMAGE_SIZE = (1920, 1080)
