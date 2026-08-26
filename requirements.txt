@@ -15,6 +15,7 @@ pypdfium2>=4.0.0
 
 # HTTP + env
 requests>=2.28.0
+# NOTE: the PyPI package is "python-dotenv"; it provides the "dotenv" module
 python-dotenv>=1.0.0
 
 # Slide image processing

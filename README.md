@@ -278,6 +278,21 @@ deck-to-video/
 
 ## Troubleshooting
 
+**`ModuleNotFoundError: No module named 'dotenv'`** — `python` isn't running from the project virtualenv. Either activate it first:
+
+```bash
+source .venv/bin/activate
+python deck_to_video.py my_deck.pptx --gen-voiceover
+```
+
+or call the venv interpreter directly:
+
+```bash
+.venv/bin/python deck_to_video.py my_deck.pptx --gen-voiceover
+```
+
+(The PyPI package is `python-dotenv`, which provides the `dotenv` module — it's already in `requirements.txt`. If the venv itself is missing packages, re-run `pip install -r requirements.txt`.)
+
 **`VOICEBOX_PROFILE_ID is not set`** — only required with `--gen-voiceover`. Add the profile UUID to `.env` or pass `--profile-id`.
 
 **PPTX rendering fails** — install LibreOffice and confirm `soffice` is on your `PATH`:

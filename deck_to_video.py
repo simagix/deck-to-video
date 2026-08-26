@@ -71,48 +71,69 @@ def _read_version() -> str:
 
 __version__ = _read_version()
 
-import dotenv  # type: ignore[import-untyped]
-import requests  # type: ignore[import-untyped]
+try:
+    import dotenv  # type: ignore[import-untyped]
+    import requests  # type: ignore[import-untyped]
 
-from google_slides import (
-    check_document_type,
-    export_slides_to_png,
-    export_speaker_notes,
-    extract_presentation_id,
-    get_presentation_title,
-    get_skipped_slide_indices,
-)
-from narration import (
-    _first_tone_instruct,
-    _parse_blocks,
-    _tone_instruct,
-    prepare_narration,
-    split_notes_on_sfx,
-)
-from paths import (
-    DEFAULT_FPS,
-    DEFAULT_INTER_SLIDE_PAUSE_SECONDS,
-    DEFAULT_KEN_BURNS_ZOOM,
-    DEFAULT_SILENT_SLIDE_SECONDS,
-    DEFAULT_VOICEOVER_TRAIL_SILENCE_SECONDS,
-    ENV_PATH,
-    OUT_BASE_DIR,
-)
-from pptx_source import (
-    export_pptx_slides_to_png,
-    export_pptx_speaker_notes,
-    get_pptx_title,
-    is_pptx_path,
-)
-from split_ranges import compute_slide_ranges, parse_split_at, video_label_for_range
-from sfx import SFX_SAMPLES, assemble_voiceover
-from video_assembly import assemble_presentation_video
-from voicebox_client import (
-    SUPPORTED_ENGINES,
-    generate_voicebox_audio,
-    get_voicebox_config,
-    personality_enabled_from_env,
-)
+    from google_slides import (
+        check_document_type,
+        export_slides_to_png,
+        export_speaker_notes,
+        extract_presentation_id,
+        get_presentation_title,
+        get_skipped_slide_indices,
+    )
+    from narration import (
+        _first_tone_instruct,
+        _parse_blocks,
+        _tone_instruct,
+        prepare_narration,
+        split_notes_on_sfx,
+    )
+    from paths import (
+        DEFAULT_FPS,
+        DEFAULT_INTER_SLIDE_PAUSE_SECONDS,
+        DEFAULT_KEN_BURNS_ZOOM,
+        DEFAULT_SILENT_SLIDE_SECONDS,
+        DEFAULT_VOICEOVER_TRAIL_SILENCE_SECONDS,
+        ENV_PATH,
+        OUT_BASE_DIR,
+    )
+    from pptx_source import (
+        export_pptx_slides_to_png,
+        export_pptx_speaker_notes,
+        get_pptx_title,
+        is_pptx_path,
+    )
+    from split_ranges import compute_slide_ranges, parse_split_at, video_label_for_range
+    from sfx import SFX_SAMPLES, assemble_voiceover
+    from video_assembly import assemble_presentation_video
+    from voicebox_client import (
+        SUPPORTED_ENGINES,
+        generate_voicebox_audio,
+        get_voicebox_config,
+        personality_enabled_from_env,
+    )
+except ImportError as exc:
+    sys.stderr.write(
+        f"\n❌ Missing Python dependency ({exc}).\n"
+        "\n"
+        "This usually means 'python' is NOT the project virtualenv.\n"
+        "Run one of:\n"
+        "\n"
+        "    source .venv/bin/activate\n"
+        "    python deck_to_video.py ...\n"
+        "\n"
+        "or invoke the venv interpreter directly:\n"
+        "\n"
+        "    .venv/bin/python deck_to_video.py ...\n"
+        "\n"
+        "If dependencies are genuinely missing from the active environment:\n"
+        "\n"
+        "    pip install -r requirements.txt\n"
+        "\n"
+    )
+    sys.exit(1)
 
 dotenv.load_dotenv(ENV_PATH)
 
