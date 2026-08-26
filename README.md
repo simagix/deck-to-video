@@ -11,7 +11,7 @@ Turn a presentation deck into a narrated MP4 video. Export slides and speaker no
 
 - **PPTX** — render slides locally with LibreOffice and read embedded speaker notes
 - **Voiceover** — synthesize narration from speaker notes using Voicebox
-- **Punchline sound effects** — tag jokes with `[sfx: rimshot]` to play *Ba Dum Tss* right after the punchline
+- **Punchline sound effects** — tag jokes with `[sfx: rimshot]` (*Ba Dum Tss*) or `[sfx: sad_trombone]` (*wah-wah-waaah*) right after the punchline
 - **Google Slides (optional)** — also accepts Google Slides IDs/URLs via the Google Drive API (requires OAuth credentials)
 - **Cloned voice / signature narrator** — generate every voiceover with a Voicebox-cloned voice for a consistent, recognizable brand voice across a series
 - **Video assembly** — combine slides and audio into 1080p MP4 files
@@ -146,7 +146,7 @@ I asked the intern to auto-merge. [laugh] It merged main into staging.
 Twice.
 ```
 
-- `[sfx: rimshot]`, `[badumtss]`, `[ba dum tss]`, and `[rimshot]` all play the same *Ba Dum Tss* sample; multiple tags per slide are supported.
+- **Rimshot** — `[sfx: rimshot]`, `[badumtss]`, `[ba dum tss]`, `[rimshot]` all play *Ba Dum Tss*. **Sad trombone** — `[sfx: sad_trombone]`, `[sad trombone]`, `[wah wah wah]`. Multiple tags per slide are supported.
 - **Sample resolution:** your `assets/ba_dum_tss.wav` always wins; `ba_dum_tss_default.wav` is only a fallback so fresh clones work out of the box (`make_sfx_assets.py` regenerates it without ever touching yours).
 - **Stereo survives the splice:** if your sample has more channels than the narration, the slide WAV is upgraded to match and the voice duplicated across channels — a true-stereo rimshot keeps its left/right image (dual-mono recordings are unaffected).
 - Each take keeps its own `[voice:` / `[tone:]` context as its style instruct (the example above speaks the setup angry and the follow-up dramatic). Slides with tags make one extra Voicebox call per split.

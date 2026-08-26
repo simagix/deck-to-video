@@ -52,6 +52,18 @@ class ParseSfxCuesTests(unittest.TestCase):
             with self.subTest(alias=alias):
                 self.assertEqual(narration.parse_sfx_cues(f"Joke.{alias}"), ["rimshot"])
 
+    def test_recognizes_sad_trombone_aliases(self):
+        for alias in (
+            "[sfx: sad_trombone]",
+            "[sfx: Sad Trombone]",
+            "[sad trombone]",
+            "[sad-trombone]",
+            "[wah wah wah]",
+            "[wahwahwah]",
+        ):
+            with self.subTest(alias=alias):
+                self.assertEqual(narration.parse_sfx_cues(f"Oh no.{alias}"), ["sad_trombone"])
+
     def test_ignores_unknown_sfx_names(self):
         self.assertEqual(narration.parse_sfx_cues("[sfx: applause]"), [])
 
@@ -152,6 +164,12 @@ class OverlaySfxOnWavTests(unittest.TestCase):
         candidates = list(sfx.SFX_SAMPLES["rimshot"])
         self.assertEqual(sfx.resolve_sfx_path("rimshot"), os.path.join(sfx.ASSETS_DIR, candidates[0]))
 
+    def test_sad_trombone_sample_exists_and_loads(self):
+        path = sfx.resolve_sfx_path("sad_trombone")
+        self.assertTrue(os.path.isfile(path), f"missing {path}")
+        loaded = sfx.load_sfx("sad_trombone", framerate=self.rate, nchannels=1)
+        self.assertGreater(len(loaded), int(3 * self.rate))  # ≈5s trombone wail
+
 
 class SplitNotesOnSfxTests(unittest.TestCase):
     USER_NOTES = (
@@ -213,6 +231,15 @@ class SplitNotesOnSfxTests(unittest.TestCase):
         self.assertEqual(len(narration.split_notes_on_sfx(notes, supported=set())), 1)
         parts = narration.split_notes_on_sfx(notes, supported={"rimshot"})
         self.assertEqual([p["kind"] for p in parts], ["narration", "sfx", "narration"])
+
+    def test_multiple_different_effects_split_in_order(self):
+        notes = "A. [badumtss] B. [sfx: sad_trombone]"
+        parts = narration.split_notes_on_sfx(notes)
+        self.assertEqual(
+            [p["kind"] for p in parts], ["narration", "sfx", "narration", "sfx"]
+        )
+        self.assertEqual(parts[1], {"kind": "sfx", "name": "rimshot"})
+        self.assertEqual(parts[3], {"kind": "sfx", "name": "sad_trombone"})
 
     def test_cues_at_edges_emit_no_empty_takes(self):
         parts = narration.split_notes_on_sfx("[badumtss]")

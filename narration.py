@@ -221,14 +221,19 @@ _TAG = re.compile(
 # like "[badumtss]". Stripped from TTS text; resolved by ``parse_sfx_cues``.
 _SFX_TAG = re.compile(
     r"\[\s*sfx:\s*(?P<name>[A-Za-z0-9_\- ]+?)\s*\]"
-    r"|\[\s*(?P<alias>badumtss|rimshot|ba[\s_\-]?dum[\s_\-]?tss)\s*\]",
+    r"|\[\s*(?P<alias>badumtss|rimshot|ba[\s_\-]?dum[\s_\-]?tss"
+    r"|sad[\s_\-]?trombone|wah[\s_\-]?wah[\s_\-]?wah)\s*\]",
     re.IGNORECASE,
 )
 
 #: Canonical sound-effect names; tag spellings normalize to these keys.
+#: (Alias keys are separator-free because ``_canonical_sfx_name`` strips
+#: spaces/underscores/hyphens before lookup.)
 SFX_ALIASES = {
     "rimshot": "rimshot",
     "badumtss": "rimshot",
+    "sadtrombone": "sad_trombone",
+    "wahwahwah": "sad_trombone",
 }
 
 
