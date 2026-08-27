@@ -7,7 +7,9 @@ import os
 import random
 from typing import List, Optional, Tuple
 
+import bgm
 from paths import (
+    DEFAULT_BG_MUSIC_VOLUME,
     DEFAULT_FPS,
     DEFAULT_INTER_SLIDE_PAUSE_SECONDS,
     DEFAULT_SILENT_SLIDE_SECONDS,
@@ -206,6 +208,8 @@ def assemble_presentation_video(
     fps: int = DEFAULT_FPS,
     inter_slide_pause_seconds: float = DEFAULT_INTER_SLIDE_PAUSE_SECONDS,
     ken_burns_zoom: float = 0.0,
+    background_music_path: Optional[str] = None,
+    bg_music_volume: float = DEFAULT_BG_MUSIC_VOLUME,
 ) -> str:
     """Stitch per-slide clips into one MP4, optionally with Ken Burns zoom/pan."""
     if not png_paths:
@@ -242,6 +246,23 @@ def assemble_presentation_video(
         # Ken Burns clips, exposing a black band on the pan side (observed on the
         # last zoom-in frame of slide 5).
         final_movie = concatenate_videoclips(slide_clips, method="chain")
+
+        # Background music ([bgm: track]) spans slide boundaries, so unlike SFX
+        # it cannot be baked into per-slide WAVs: layer it under the whole
+        # assembled soundtrack here, right before rendering.
+        if background_music_path:
+            print(
+                f"\n🎵 Mixing background music "
+                f"{os.path.basename(background_music_path)!r} "
+                f"(volume {bg_music_volume}) ..."
+            )
+            final_movie = bgm.attach_background_music(
+                final_movie,
+                background_music_path,
+                volume=bg_music_volume,
+                wav_paths=[p for p in wav_paths if p],
+            )
+
         print(f"\n📼 Rendering {output_mp4} ...")
         final_movie.write_videofile(
             output_mp4,

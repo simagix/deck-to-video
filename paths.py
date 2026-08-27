@@ -18,6 +18,9 @@ DEFAULT_VOICEOVER_TRAIL_SILENCE_SECONDS = 1.0
 # spoken word and the hit, and how loud the sample plays relative to speech.
 DEFAULT_SFX_BEAT_SECONDS = 0.25
 DEFAULT_SFX_GAIN = 0.9
+# Background music ([bgm: track.mp3]): how loud the music plays relative to
+# the voiceover. Applied via MoviePy CompositeAudioClip in video_assembly.py.
+DEFAULT_BG_MUSIC_VOLUME = 0.15
 DEFAULT_FPS = 24
 DEFAULT_KEN_BURNS_ZOOM = 1.15
 TARGET_IMAGE_SIZE = (1920, 1080)

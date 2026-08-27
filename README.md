@@ -12,6 +12,7 @@ Turn a presentation deck into a narrated MP4 video. Export slides and speaker no
 - **PPTX** — render slides locally with LibreOffice and read embedded speaker notes
 - **Voiceover** — synthesize narration from speaker notes using Voicebox
 - **Punchline sound effects** — tag jokes with `[sfx: rimshot]` (*Ba Dum Tss*) or `[sfx: sad_trombone]` (*wah-wah-waaah*) right after the punchline
+- **Background music** — drop one `[bgm: ambient_loop]` tag anywhere in your speaker notes to soundtrack the entire video under the narration
 - **Google Slides (optional)** — also accepts Google Slides IDs/URLs via the Google Drive API (requires OAuth credentials)
 - **Cloned voice / signature narrator** — generate every voiceover with a Voicebox-cloned voice for a consistent, recognizable brand voice across a series
 - **Video assembly** — combine slides and audio into 1080p MP4 files
@@ -154,6 +155,33 @@ Twice.
 - The result is baked into `slide_XX_voiceover.wav` at generation time, so video assembly needs no changes and cached-WAV reuse keeps working. Re-run with `--gen-voiceover` after adding or editing a tag.
 - **Your own recording:** drop `assets/ba_dum_tss.wav` (convert any licensed rimshot to WAV) and it takes precedence over the synthesized default in `ba_dum_tss_default.wav`, which `make_sfx_assets.py` regenerates without ever touching your file.
 
+### Background music tags ([bgm: ...])
+
+Unlike punchline SFX, background music is **deck-level**: the FIRST `[bgm: ...]`
+tag found across any slide's speaker notes selects ONE continuous track, layered
+underneath the whole assembled narration+SFX timeline at render time (so it can
+span slide boundaries and survive cached-WAV reuse):
+
+```text
+[voice: Simone | tone: warm]
+
+Welcome, everyone. Today we automate the boring parts.
+
+[bgm: ambient_loop | volume: 0.18]
+```
+
+- **Where it comes from:** a bare name resolves inside `assets/` trying `.mp3`
+  then `.wav`; you may also give an explicit path (`[bgm: ~/music/vip.mp3]`).
+  A quiet CC0 starter pad ships as `assets/ambient_loop.mp3`, regenerable via
+  `python make_bgm_assets.py`.
+- **Volume** — defaults to `DEFAULT_BG_MUSIC_VOLUME` (0.15) from `paths.py`;
+  override per-tag with `| volume: 0.2`. The track auto-loops until the video
+  ends and always respects the narration's own sample rate / channel layout.
+- **CLI escape hatches:** `--bg-music TRACK` overrides every tag; mutually
+  exclusive `--no-bg-music` silences the deck regardless of notes. A typo'd
+  track fails loudly instead of rendering silently missing its score.
+- Tags are stripped from the text sent to Voicebox (never read aloud).
+
 ## Usage
 
 ### Basic examples
@@ -172,7 +200,7 @@ python deck_to_video.py my_deck.pptx
 python deck_to_video.py my_deck.pptx -o presentation.mp4
 
 # Show the installed version
-python deck_to_video.py --version   # deck_to_video v0.2.0
+python deck_to_video.py --version   # deck_to_video v0.3.0
 ```
 
 ### Common options

@@ -75,6 +75,7 @@ try:
     import dotenv  # type: ignore[import-untyped]
     import requests  # type: ignore[import-untyped]
 
+    from bgm import resolve_bgm_path
     from google_slides import (
         check_document_type,
         export_slides_to_png,
@@ -87,10 +88,12 @@ try:
         _first_tone_instruct,
         _parse_blocks,
         _tone_instruct,
+        parse_bgm_cues,
         prepare_narration,
         split_notes_on_sfx,
     )
     from paths import (
+        DEFAULT_BG_MUSIC_VOLUME,
         DEFAULT_FPS,
         DEFAULT_INTER_SLIDE_PAUSE_SECONDS,
         DEFAULT_KEN_BURNS_ZOOM,
@@ -368,6 +371,35 @@ def _voiceover_paths_for_slides(
     return wav_paths
 
 
+def _background_music_for_deck(
+    notes_per_slide: List[str],
+    override: Optional[str] = None,
+    enabled: bool = True,
+) -> Tuple[Optional[str], float]:
+    """Resolve the deck-level background-music track and its volume.
+
+    ``[bgm: ...]`` tags are presentation-scoped rather than per-slide: the
+    FIRST tag found across all speaker notes selects the one continuous track
+    layered under the entire assembled timeline. An explicit *override* (the
+    --bg-music flag) supersedes tags; *enabled=False* (--no-bg-music) turns
+    music off entirely even when tags are present.
+    """
+    if not enabled:
+        return None, DEFAULT_BG_MUSIC_VOLUME
+
+    if override:
+        return resolve_bgm_path(override), DEFAULT_BG_MUSIC_VOLUME
+
+    for notes in notes_per_slide:
+        cues = parse_bgm_cues(notes)
+        if cues:
+            ref, volume = cues[0]
+            resolved_volume = DEFAULT_BG_MUSIC_VOLUME if volume is None else volume
+            return resolve_bgm_path(ref), resolved_volume
+
+    return None, DEFAULT_BG_MUSIC_VOLUME
+
+
 def _render_videos(
     png_paths: List[str],
     wav_paths: List[Optional[str]],
@@ -379,6 +411,8 @@ def _render_videos(
     fps: int,
     inter_slide_pause_seconds: float,
     ken_burns_zoom: float = 0.0,
+    background_music_path: Optional[str] = None,
+    bg_music_volume: float = DEFAULT_BG_MUSIC_VOLUME,
 ) -> List[str]:
     ranges = compute_slide_ranges(len(png_paths), split_points)
     created: List[str] = []
@@ -405,6 +439,8 @@ def _render_videos(
             fps=fps,
             inter_slide_pause_seconds=inter_slide_pause_seconds,
             ken_burns_zoom=ken_burns_zoom,
+            background_music_path=background_music_path,
+            bg_music_volume=bg_music_volume,
         )
         created.append(os.path.abspath(mp4_path))
     return created
@@ -477,6 +513,8 @@ def main(
     split_at: Optional[str] = None,
     ken_burns_zoom: float = DEFAULT_KEN_BURNS_ZOOM,
     engine: Optional[str] = None,
+    bg_music: Optional[str] = None,
+    no_bg_music: bool = False,
 ) -> int:
     try:
         use_personality = (
@@ -561,6 +599,12 @@ def main(
             print(f"\n✅ Export complete (PNGs + WAVs) in {os.path.abspath(out_dir)}")
             return 0
 
+        background_music_path, bg_music_volume = _background_music_for_deck(
+            notes_per_slide,
+            override=bg_music,
+            enabled=not no_bg_music,
+        )
+
         created = _render_videos(
             png_paths,
             wav_paths,
@@ -572,6 +616,8 @@ def main(
             fps=fps,
             inter_slide_pause_seconds=inter_slide_pause_seconds,
             ken_burns_zoom=ken_burns_zoom,
+            background_music_path=background_music_path,
+            bg_music_volume=bg_music_volume,
         )
         if len(created) == 1:
             print(f"\n✅ Video saved: {created[0]}")
@@ -694,6 +740,22 @@ if __name__ == "__main__":
         ),
     )
 
+    bg_music_group = parser.add_mutually_exclusive_group()
+    bg_music_group.add_argument(
+        "--bg-music",
+        default=None,
+        metavar="TRACK",
+        help=(
+            "Background-music track overriding any [bgm: ...] note tags: a "
+            "bare name looked up under assets/ or a path to an .mp3/.wav"
+        ),
+    )
+    bg_music_group.add_argument(
+        "--no-bg-music",
+        action="store_true",
+        help="Ignore [bgm: ...] note tags; assemble without background music",
+    )
+
     args = parser.parse_args()
 
     sys.exit(
@@ -711,5 +773,7 @@ if __name__ == "__main__":
             split_at=args.split_at,
             ken_burns_zoom=DEFAULT_KEN_BURNS_ZOOM if args.ken_burns else 0.0,
             engine=args.engine,
+            bg_music=args.bg_music,
+            no_bg_music=args.no_bg_music,
         )
     )
