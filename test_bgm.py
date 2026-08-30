@@ -249,7 +249,7 @@ class AttachBackgroundMusicTests(unittest.TestCase):
     def test_voiced_deck_gets_composite_layer_under_narration(self):
         from moviepy.audio.AudioClip import CompositeAudioClip
 
-        _, ImageClip, _, _ = __import__("video_assembly")._import_moviepy()
+        _, ImageClip, _, _, _ = __import__("video_assembly")._import_moviepy()
         voice = __import__("video_assembly")._import_moviepy()[0](self.voice_wav)
         self.addCleanup(_close_clip, voice)
 
@@ -266,7 +266,7 @@ class AttachBackgroundMusicTests(unittest.TestCase):
         self.assertAlmostEqual(scored.duration, voice.duration, places=6)
 
     def test_silent_deck_gets_music_as_sole_soundtrack(self):
-        _, ImageClip, _, _ = __import__("video_assembly")._import_moviepy()
+        _, ImageClip, _, _, _ = __import__("video_assembly")._import_moviepy()
 
         container = ImageClip(np.zeros((16, 16), dtype=np.uint8))
         container = _clip_set_duration(container, 0.75)

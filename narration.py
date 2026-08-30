@@ -222,7 +222,8 @@ _TAG = re.compile(
 _SFX_TAG = re.compile(
     r"\[\s*sfx:\s*(?P<name>[A-Za-z0-9_\- ]+?)\s*\]"
     r"|\[\s*(?P<alias>badumtss|rimshot|ba[\s_\-]?dum[\s_\-]?tss"
-    r"|sad[\s_\-]?trombone|wah[\s_\-]?wah[\s_\-]?wah)\s*\]",
+    r"|sad[\s_\-]?trombone|wah[\s_\-]?wah[\s_\-]?wah"
+    r"|drum[\s_\-]?roll)\s*\]",
     re.IGNORECASE,
 )
 
@@ -234,6 +235,7 @@ SFX_ALIASES = {
     "badumtss": "rimshot",
     "sadtrombone": "sad_trombone",
     "wahwahwah": "sad_trombone",
+    "drumroll": "drum_roll",
 }
 
 # A background-music tag: ``[bgm: TRACK]`` with optional trailing spec fields

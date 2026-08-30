@@ -98,6 +98,8 @@ try:
         DEFAULT_INTER_SLIDE_PAUSE_SECONDS,
         DEFAULT_KEN_BURNS_ZOOM,
         DEFAULT_SILENT_SLIDE_SECONDS,
+        DEFAULT_TRANSITION_SECONDS,
+        DEFAULT_TRANSITION_STYLE,
         DEFAULT_VOICEOVER_TRAIL_SILENCE_SECONDS,
         ENV_PATH,
         OUT_BASE_DIR,
@@ -110,7 +112,7 @@ try:
     )
     from split_ranges import compute_slide_ranges, parse_split_at, video_label_for_range
     from sfx import SFX_SAMPLES, assemble_voiceover
-    from video_assembly import assemble_presentation_video
+    from video_assembly import TRANSITION_STYLES, assemble_presentation_video
     from voicebox_client import (
         SUPPORTED_ENGINES,
         generate_voicebox_audio,
@@ -413,6 +415,8 @@ def _render_videos(
     ken_burns_zoom: float = 0.0,
     background_music_path: Optional[str] = None,
     bg_music_volume: float = DEFAULT_BG_MUSIC_VOLUME,
+    transition: str = DEFAULT_TRANSITION_STYLE,
+    transition_seconds: float = DEFAULT_TRANSITION_SECONDS,
 ) -> List[str]:
     ranges = compute_slide_ranges(len(png_paths), split_points)
     created: List[str] = []
@@ -441,6 +445,8 @@ def _render_videos(
             ken_burns_zoom=ken_burns_zoom,
             background_music_path=background_music_path,
             bg_music_volume=bg_music_volume,
+            transition=transition,
+            transition_seconds=transition_seconds,
         )
         created.append(os.path.abspath(mp4_path))
     return created
@@ -515,6 +521,8 @@ def main(
     engine: Optional[str] = None,
     bg_music: Optional[str] = None,
     no_bg_music: bool = False,
+    transition: str = DEFAULT_TRANSITION_STYLE,
+    transition_seconds: float = DEFAULT_TRANSITION_SECONDS,
 ) -> int:
     try:
         use_personality = (
@@ -618,6 +626,8 @@ def main(
             ken_burns_zoom=ken_burns_zoom,
             background_music_path=background_music_path,
             bg_music_volume=bg_music_volume,
+            transition=transition,
+            transition_seconds=transition_seconds,
         )
         if len(created) == 1:
             print(f"\n✅ Video saved: {created[0]}")
@@ -756,6 +766,29 @@ if __name__ == "__main__":
         help="Ignore [bgm: ...] note tags; assemble without background music",
     )
 
+    parser.add_argument(
+        "--transition",
+        choices=list(TRANSITION_STYLES),
+        default=DEFAULT_TRANSITION_STYLE,
+        help=(
+            "Effect at each slide change: 'dip-black' fades through black "
+            "(default), 'dip-white' flashes through white, 'crossfade' "
+            "still-dissolves between slides, 'none' hard-cuts. Every style "
+            "also fades out to black at the end; the first slide is fully "
+            "visible from frame 0."
+        ),
+    )
+    parser.add_argument(
+        "--transition-duration",
+        type=float,
+        default=DEFAULT_TRANSITION_SECONDS,
+        metavar="SECONDS",
+        help=(
+            "Length of each slide transition and of the opener/closer fades "
+            f"(default: {DEFAULT_TRANSITION_SECONDS}; 0 disables transitions)"
+        ),
+    )
+
     args = parser.parse_args()
 
     sys.exit(
@@ -775,5 +808,7 @@ if __name__ == "__main__":
             engine=args.engine,
             bg_music=args.bg_music,
             no_bg_music=args.no_bg_music,
+            transition=args.transition,
+            transition_seconds=args.transition_duration,
         )
     )

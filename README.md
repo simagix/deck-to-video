@@ -16,6 +16,7 @@ Turn a presentation deck into a narrated MP4 video. Export slides and speaker no
 - **Google Slides (optional)** — also accepts Google Slides IDs/URLs via the Google Drive API (requires OAuth credentials)
 - **Cloned voice / signature narrator** — generate every voiceover with a Voicebox-cloned voice for a consistent, recognizable brand voice across a series
 - **Video assembly** — combine slides and audio into 1080p MP4 files
+- **Slide transitions** — a quick dip-to-black at each slide change (or dip-to-white / still-dissolve crossfade), plus a fade-through-black closer; the first slide stays fully visible from frame 0; `--transition none` for hard cuts
 - **Flexible output** — export assets only, process a single slide, split into multiple videos, or customize FPS and pauses
 
 ## Prerequisites
@@ -147,7 +148,7 @@ I asked the intern to auto-merge. [laugh] It merged main into staging.
 Twice.
 ```
 
-- **Rimshot** — `[sfx: rimshot]`, `[badumtss]`, `[ba dum tss]`, `[rimshot]` all play *Ba Dum Tss*. **Sad trombone** — `[sfx: sad_trombone]`, `[sad trombone]`, `[wah wah wah]`. Multiple tags per slide are supported.
+- **Rimshot** — `[sfx: rimshot]`, `[badumtss]`, `[ba dum tss]`, `[rimshot]` all play *Ba Dum Tss*. **Sad trombone** — `[sfx: sad_trombone]`, `[sad trombone]`, `[wah wah wah]`. **Drum roll** — `[sfx: drum_roll]`, `[drumroll]`, `[drum roll]` rolls for ~4s, so place it *before* the reveal (`And the winner is… [drumroll] …you!`) to build tension into the punchline. Multiple tags per slide are supported.
 - **Sample resolution:** your `assets/ba_dum_tss.wav` always wins; `ba_dum_tss_default.wav` is only a fallback so fresh clones work out of the box (`make_sfx_assets.py` regenerates it without ever touching yours).
 - **Stereo survives the splice:** if your sample has more channels than the narration, the slide WAV is upgraded to match and the voice duplicated across channels — a true-stereo rimshot keeps its left/right image (dual-mono recordings are unaffected).
 - Each take keeps its own `[voice:` / `[tone:]` context as its style instruct (the example above speaks the setup angry and the follow-up dramatic). Slides with tags make one extra Voicebox call per split.
@@ -223,6 +224,10 @@ python deck_to_video.py my_deck.pptx --fps 30 --inter-slide-pause 0.5
 
 # Add Ken Burns zoom/pan to each slide
 python deck_to_video.py my_deck.pptx --ken-burns
+
+# Pick the slide-change effect and its length (dip-black is the default)
+python deck_to_video.py my_deck.pptx --transition dip-white --transition-duration 0.6
+python deck_to_video.py my_deck.pptx --transition none   # hard cuts, no transitions
 ```
 
 ### CLI reference
@@ -242,6 +247,8 @@ python deck_to_video.py my_deck.pptx --ken-burns
 | `--fps` | Video frame rate (default: `24`) |
 | `--inter-slide-pause SECONDS` | Silent hold after slides without voiceover (default: `1.0`; voiced slides carry a built-in 1s tail) |
 | `--ken-burns` | Apply the Ken Burns zoom/pan effect to each slide (zoom x1.08 over the slide duration). By default slides are rendered as static images (default: OFF) |
+| `--transition STYLE` | Slide-change effect: `dip-black` (default), `dip-white`, `crossfade`, or `none`. Every style also fades out to black at the end; the first slide is fully visible from frame 0 |
+| `--transition-duration SECONDS` | Length of each slide transition and of the opener/closer fades (default: `0.5`; `0` disables transitions) |
 
 ## Output
 
