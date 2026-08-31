@@ -222,7 +222,8 @@ _TAG = re.compile(
 _SFX_TAG = re.compile(
     r"\[\s*sfx:\s*(?P<name>[A-Za-z0-9_\- ]+?)\s*\]"
     r"|\[\s*(?P<alias>badumtss|rimshot|ba[\s_\-]?dum[\s_\-]?tss"
-    r"|sad[\s_\-]?trombone|wah[\s_\-]?wah[\s_\-]?wah)\s*\]",
+    r"|sad[\s_\-]?trombone|wah[\s_\-]?wah[\s_\-]?wah"
+    r"|drum[\s_\-]?roll)\s*\]",
     re.IGNORECASE,
 )
 
@@ -234,7 +235,63 @@ SFX_ALIASES = {
     "badumtss": "rimshot",
     "sadtrombone": "sad_trombone",
     "wahwahwah": "sad_trombone",
+    "drumroll": "drum_roll",
 }
+
+# A background-music tag: ``[bgm: TRACK]`` with optional trailing spec fields
+# separated by pipes, e.g. ``[bgm: ambient_loop | volume: 0.2]``. Field
+# separators deliberately exclude newlines (spaces/tabs only) so a stray
+# ``[bgm:`` in prose never swallows the following line as a track name; the
+# first field is always the reference, further fields are parsed leniently
+# (``volume`` honored; anything else ignored for forward compatibility) and
+# the whole tag is stripped from TTS text by ``_strip_bgm_tags``.
+_BGM_TAG = re.compile(
+    r"\[\s*bgm:[ \t]*(?P<ref>[^|\]\r\n]+)"
+    r"(?P<spec>(?:[ \t]*\|[ \t]*[^|\]\r\n]*)*)"
+    r"[ \t]*\]",
+    re.IGNORECASE,
+)
+
+#: Volume override inside a ``[bgm: ...]`` spec (e.g. ``| volume: 0.3``).
+_BGM_VOLUME = re.compile(r"\bvolume\b\s*[:=]?\s*(\d+(?:\.\d+)?)", re.IGNORECASE)
+
+
+def _bgm_volume_from_spec(spec: str) -> Optional[float]:
+    """Extract an optional positive volume from a BGM tag's trailing spec."""
+    match = _BGM_VOLUME.search(spec or "")
+    if not match:
+        return None
+    return float(match.group(1))
+
+
+def parse_bgm_cues(notes_text: str) -> List[Tuple[str, Optional[float]]]:
+    """Return ``(track_ref, volume_or_None)`` for each ``[bgm: ...]`` tag.
+
+    Order-preserving and duplicate-keeping so callers decide precedence; the
+    deck pipeline uses only the FIRST cue across all slides, because
+    background music spans slide boundaries at video-assembly time rather
+    than being baked into per-slide WAVs like punchline SFX.
+    """
+    cues: List[Tuple[str, Optional[float]]] = []
+    for match in _BGM_TAG.finditer(notes_text or ""):
+        ref = match.group("ref").strip()
+        if ref:
+            cues.append((ref, _bgm_volume_from_spec(match.group("spec"))))
+    return cues
+
+
+def _strip_bgm_tags(text: str) -> str:
+    """Remove ``[bgm: ...]`` tags.
+
+    Background music is consumed at video-assembly time (see ``bgm.py``);
+    the raw tag text must never reach the TTS.
+    """
+    if not text:
+        return text
+    stripped = _BGM_TAG.sub("", text)
+    stripped = re.sub(r"[ \t]+\n", "\n", stripped)
+    stripped = re.sub(r"[ \t]{2,}", " ", stripped)
+    return stripped.strip()
 
 
 def _canonical_sfx_name(raw: str) -> Optional[str]:
@@ -448,6 +505,7 @@ def prepare_narration(raw_notes: str, *, personality: bool = False) -> str:
         return ""
     text = _strip_voice_tone_tags(raw_notes)
     text = _strip_sfx_tags(text)
+    text = _strip_bgm_tags(text)
     text = strip_stage_directions(text)
     if not text:
         return ""

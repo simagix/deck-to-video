@@ -29,8 +29,9 @@ ASSETS_DIR = os.path.join(SYNTH_DIR, "assets")
 #: which ``make_sfx_assets.py`` keeps in ``ba_dum_tss_default.wav``.
 SFX_SAMPLES = {
     "rimshot": ("ba_dum_tss.wav", "ba_dum_tss_default.wav"),
-    # User-supplied recording only; no synthesized fallback exists for this one.
+    # User-supplied recordings only; no synthesized fallbacks exist for these.
     "sad_trombone": ("sad_trombone.wav",),
+    "drum_roll": ("drum_roll.wav",),
 }
 
 

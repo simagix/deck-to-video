@@ -64,6 +64,17 @@ class ParseSfxCuesTests(unittest.TestCase):
             with self.subTest(alias=alias):
                 self.assertEqual(narration.parse_sfx_cues(f"Oh no.{alias}"), ["sad_trombone"])
 
+    def test_recognizes_drum_roll_aliases(self):
+        for alias in (
+            "[sfx: drum_roll]",
+            "[sfx: Drum Roll]",
+            "[drumroll]",
+            "[drum roll]",
+            "[drum-roll]",
+        ):
+            with self.subTest(alias=alias):
+                self.assertEqual(narration.parse_sfx_cues(f"Ready?{alias}"), ["drum_roll"])
+
     def test_ignores_unknown_sfx_names(self):
         self.assertEqual(narration.parse_sfx_cues("[sfx: applause]"), [])
 
@@ -98,6 +109,47 @@ class StripSfxTagsTests(unittest.TestCase):
     def test_strip_leaves_no_double_spaces(self):
         out = narration._strip_sfx_tags("before [sfx: rimshot] after")
         self.assertEqual(out, "before after")
+
+
+_DRUM_ROLL_PATH = os.path.join(sfx.ASSETS_DIR, "drum_roll.wav")
+
+
+@unittest.skipUnless(
+    os.path.isfile(_DRUM_ROLL_PATH), "assets/drum_roll.wav is not present"
+)
+class DrumRollSfxTests(unittest.TestCase):
+    """The user-supplied assets/drum_roll.wav rides the standard SFX splice."""
+
+    def test_drum_roll_resolves_to_user_asset(self):
+        self.assertEqual(sfx.resolve_sfx_path("drum_roll"), _DRUM_ROLL_PATH)
+
+    def test_overlay_mixes_drum_roll_after_speech(self):
+        tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(tmp.cleanup)
+        wav_path = os.path.join(tmp.name, "slide_01_voiceover.wav")
+        rate = 8000
+        speech_end = _write_tone_wav(wav_path, rate=rate)
+        original_params, original = _read_wav(wav_path)
+
+        self.assertTrue(sfx.overlay_sfx_on_wav(wav_path, "drum_roll", tail_seconds=1.0))
+        params, mixed = _read_wav(wav_path)
+
+        # Same format (the sample is fitted to the narration), strictly
+        # longer: the ~4.3 s roll rides the same splice path as the rimshot.
+        self.assertEqual(params.framerate, original_params.framerate)
+        self.assertEqual(params.nchannels, original_params.nchannels)
+        self.assertGreater(len(mixed), len(original) + 3 * rate)
+
+        # Beat gap still silent, then the roll lands right after it.
+        hit_start = int(round((speech_end + 0.25) * rate))
+        gap = mixed[int(speech_end * rate) : hit_start]
+        self.assertAlmostEqual(float(np.abs(gap).max()), 0.0, places=6)
+        roll_region = mixed[hit_start : hit_start + rate]
+        self.assertGreater(float(np.abs(roll_region).max()), 0.05)
+
+        # Trailing-silence contract holds across the final second.
+        tail = mixed[-rate:]
+        self.assertLess(float(np.abs(tail).max()), 0.02)
 
 
 class OverlaySfxOnWavTests(unittest.TestCase):

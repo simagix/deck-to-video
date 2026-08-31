@@ -18,7 +18,18 @@ DEFAULT_VOICEOVER_TRAIL_SILENCE_SECONDS = 1.0
 # spoken word and the hit, and how loud the sample plays relative to speech.
 DEFAULT_SFX_BEAT_SECONDS = 0.25
 DEFAULT_SFX_GAIN = 0.9
+# Background music ([bgm: track.mp3]): how loud the music plays relative to
+# the voiceover. Applied via MoviePy CompositeAudioClip in video_assembly.py.
+DEFAULT_BG_MUSIC_VOLUME = 0.15
 DEFAULT_FPS = 24
 DEFAULT_KEN_BURNS_ZOOM = 1.15
+DEFAULT_KEN_BURNS_ZOOM = 1.15
+# Slide-change transitions (--transition): total length of the effect at each
+# slide boundary. Boundary dips split it in half (fade-out on the outgoing
+# slide's tail, fade-in on the incoming slide's head); the closing fade at the
+# video's end uses the full value. The first slide never fades in — it is
+# fully visible from frame 0 so previews/thumbnails show the slide.
+DEFAULT_TRANSITION_STYLE = "dip-black"
+DEFAULT_TRANSITION_SECONDS = 0.5
 TARGET_IMAGE_SIZE = (1920, 1080)
 KEN_BURNS_IMAGE_SIZE = (1824, 1024)  # Slightly smaller than target to allow for panning

@@ -12,9 +12,11 @@ Turn a presentation deck into a narrated MP4 video. Export slides and speaker no
 - **PPTX** — render slides locally with LibreOffice and read embedded speaker notes
 - **Voiceover** — synthesize narration from speaker notes using Voicebox
 - **Punchline sound effects** — tag jokes with `[sfx: rimshot]` (*Ba Dum Tss*) or `[sfx: sad_trombone]` (*wah-wah-waaah*) right after the punchline
+- **Background music** — drop one `[bgm: ambient_loop]` tag anywhere in your speaker notes to soundtrack the entire video under the narration
 - **Google Slides (optional)** — also accepts Google Slides IDs/URLs via the Google Drive API (requires OAuth credentials)
 - **Cloned voice / signature narrator** — generate every voiceover with a Voicebox-cloned voice for a consistent, recognizable brand voice across a series
 - **Video assembly** — combine slides and audio into 1080p MP4 files
+- **Slide transitions** — a quick dip-to-black at each slide change (or dip-to-white / still-dissolve crossfade), plus a fade-through-black closer; the first slide stays fully visible from frame 0; `--transition none` for hard cuts
 - **Flexible output** — export assets only, process a single slide, split into multiple videos, or customize FPS and pauses
 
 ## Prerequisites
@@ -146,13 +148,40 @@ I asked the intern to auto-merge. [laugh] It merged main into staging.
 Twice.
 ```
 
-- **Rimshot** — `[sfx: rimshot]`, `[badumtss]`, `[ba dum tss]`, `[rimshot]` all play *Ba Dum Tss*. **Sad trombone** — `[sfx: sad_trombone]`, `[sad trombone]`, `[wah wah wah]`. Multiple tags per slide are supported.
+- **Rimshot** — `[sfx: rimshot]`, `[badumtss]`, `[ba dum tss]`, `[rimshot]` all play *Ba Dum Tss*. **Sad trombone** — `[sfx: sad_trombone]`, `[sad trombone]`, `[wah wah wah]`. **Drum roll** — `[sfx: drum_roll]`, `[drumroll]`, `[drum roll]` rolls for ~4s, so place it *before* the reveal (`And the winner is… [drumroll] …you!`) to build tension into the punchline. Multiple tags per slide are supported.
 - **Sample resolution:** your `assets/ba_dum_tss.wav` always wins; `ba_dum_tss_default.wav` is only a fallback so fresh clones work out of the box (`make_sfx_assets.py` regenerates it without ever touching yours).
 - **Stereo survives the splice:** if your sample has more channels than the narration, the slide WAV is upgraded to match and the voice duplicated across channels — a true-stereo rimshot keeps its left/right image (dual-mono recordings are unaffected).
 - Each take keeps its own `[voice:` / `[tone:]` context as its style instruct (the example above speaks the setup angry and the follow-up dramatic). Slides with tags make one extra Voicebox call per split.
 - Tags are stripped from the text sent to Voicebox (never read aloud); unknown names are ignored safely.
 - The result is baked into `slide_XX_voiceover.wav` at generation time, so video assembly needs no changes and cached-WAV reuse keeps working. Re-run with `--gen-voiceover` after adding or editing a tag.
 - **Your own recording:** drop `assets/ba_dum_tss.wav` (convert any licensed rimshot to WAV) and it takes precedence over the synthesized default in `ba_dum_tss_default.wav`, which `make_sfx_assets.py` regenerates without ever touching your file.
+
+### Background music tags ([bgm: ...])
+
+Unlike punchline SFX, background music is **deck-level**: the FIRST `[bgm: ...]`
+tag found across any slide's speaker notes selects ONE continuous track, layered
+underneath the whole assembled narration+SFX timeline at render time (so it can
+span slide boundaries and survive cached-WAV reuse):
+
+```text
+[voice: Simone | tone: warm]
+
+Welcome, everyone. Today we automate the boring parts.
+
+[bgm: ambient_loop | volume: 0.18]
+```
+
+- **Where it comes from:** a bare name resolves inside `assets/` trying `.mp3`
+  then `.wav`; you may also give an explicit path (`[bgm: ~/music/vip.mp3]`).
+  A quiet CC0 starter pad ships as `assets/ambient_loop.mp3`, regenerable via
+  `python make_bgm_assets.py`.
+- **Volume** — defaults to `DEFAULT_BG_MUSIC_VOLUME` (0.15) from `paths.py`;
+  override per-tag with `| volume: 0.2`. The track auto-loops until the video
+  ends and always respects the narration's own sample rate / channel layout.
+- **CLI escape hatches:** `--bg-music TRACK` overrides every tag; mutually
+  exclusive `--no-bg-music` silences the deck regardless of notes. A typo'd
+  track fails loudly instead of rendering silently missing its score.
+- Tags are stripped from the text sent to Voicebox (never read aloud).
 
 ## Usage
 
@@ -172,13 +201,15 @@ python deck_to_video.py my_deck.pptx
 python deck_to_video.py my_deck.pptx -o presentation.mp4
 
 # Show the installed version
-python deck_to_video.py --version   # deck_to_video v0.2.0
+python deck_to_video.py --version   # deck_to_video v0.3.0
 ```
 
 ### Common options
 
 ```bash
-# Process one slide for a quick test
+# Render a single slide into its own video (does NOT touch the full deck's MP4).
+# That slide's files keep their real number, so a previous run's voiceover for
+# slide 3 is reused correctly; pass --gen-voiceover to regenerate narration.
 python deck_to_video.py my_deck.pptx --only-slide 3
 
 # Export PNGs and notes only (skip video assembly)
@@ -195,6 +226,10 @@ python deck_to_video.py my_deck.pptx --fps 30 --inter-slide-pause 0.5
 
 # Add Ken Burns zoom/pan to each slide
 python deck_to_video.py my_deck.pptx --ken-burns
+
+# Pick the slide-change effect and its length (dip-black is the default)
+python deck_to_video.py my_deck.pptx --transition dip-white --transition-duration 0.6
+python deck_to_video.py my_deck.pptx --transition none   # hard cuts, no transitions
 ```
 
 ### CLI reference
@@ -205,7 +240,7 @@ python deck_to_video.py my_deck.pptx --ken-burns
 | `--profile-id` | Voicebox profile UUID (overrides `.env`) |
 | `--voicebox-url` | Voicebox API base URL (default: `http://127.0.0.1:17493`) |
 | `--engine NAME` | TTS engine, overriding the profile's Default Engine (`qwen`, `qwen_custom_voice`, `luxtts`, `chatterbox`, `chatterbox_turbo`, `tada`, `kokoro`) |
-| `--only-slide N` | Process a single slide (1-based index) |
+| `--only-slide N` | Process a single slide (1-based index). Only that slide is exported and rendered, producing one MP4 named `<deck>-slide-NN.mp4` (the full deck's video is never overwritten). The slide's files keep their real number (`slide_NN.png` / `slide_NN_notes.txt` / `slide_NN_voiceover.wav`), so a previous run's voiceover for that slide is reused correctly; pass `--gen-voiceover` to regenerate it |
 | `-o`, `--output` | Output MP4 path |
 | `--export-only` | Export PNGs and notes; skip MP4 assembly |
 | `--gen-voiceover` | Generate voiceover WAVs via Voicebox (default: reuse existing files) |
@@ -214,6 +249,8 @@ python deck_to_video.py my_deck.pptx --ken-burns
 | `--fps` | Video frame rate (default: `24`) |
 | `--inter-slide-pause SECONDS` | Silent hold after slides without voiceover (default: `1.0`; voiced slides carry a built-in 1s tail) |
 | `--ken-burns` | Apply the Ken Burns zoom/pan effect to each slide (zoom x1.08 over the slide duration). By default slides are rendered as static images (default: OFF) |
+| `--transition STYLE` | Slide-change effect: `dip-black` (default), `dip-white`, `crossfade`, or `none`. Every style also fades out to black at the end; the first slide is fully visible from frame 0 |
+| `--transition-duration SECONDS` | Length of each slide transition and of the opener/closer fades (default: `0.5`; `0` disables transitions) |
 
 ## Output
 

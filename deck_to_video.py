@@ -75,6 +75,7 @@ try:
     import dotenv  # type: ignore[import-untyped]
     import requests  # type: ignore[import-untyped]
 
+    from bgm import resolve_bgm_path
     from google_slides import (
         check_document_type,
         export_slides_to_png,
@@ -87,14 +88,18 @@ try:
         _first_tone_instruct,
         _parse_blocks,
         _tone_instruct,
+        parse_bgm_cues,
         prepare_narration,
         split_notes_on_sfx,
     )
     from paths import (
+        DEFAULT_BG_MUSIC_VOLUME,
         DEFAULT_FPS,
         DEFAULT_INTER_SLIDE_PAUSE_SECONDS,
         DEFAULT_KEN_BURNS_ZOOM,
         DEFAULT_SILENT_SLIDE_SECONDS,
+        DEFAULT_TRANSITION_SECONDS,
+        DEFAULT_TRANSITION_STYLE,
         DEFAULT_VOICEOVER_TRAIL_SILENCE_SECONDS,
         ENV_PATH,
         OUT_BASE_DIR,
@@ -107,7 +112,7 @@ try:
     )
     from split_ranges import compute_slide_ranges, parse_split_at, video_label_for_range
     from sfx import SFX_SAMPLES, assemble_voiceover
-    from video_assembly import assemble_presentation_video
+    from video_assembly import TRANSITION_STYLES, assemble_presentation_video
     from voicebox_client import (
         SUPPORTED_ENGINES,
         generate_voicebox_audio,
@@ -148,6 +153,12 @@ def _sorted_slide_assets(output_dir: str, suffix: str) -> List[str]:
     return [path for _, path in paths]
 
 
+def _slide_number_from_name(path: str, suffix: str) -> Optional[int]:
+    """Extract the 1-based slide number embedded in an exported asset name."""
+    match = re.match(rf"^slide_(\d{{2}}){re.escape(suffix)}$", os.path.basename(path))
+    return int(match.group(1)) if match else None
+
+
 def _sanitize_title_for_path(title: str) -> str:
     sanitized = title.replace(" ", "_").replace("/", "_").replace("\\", "_")
     return "".join(char for char in sanitized if char.isalnum() or char in ("_", "-", "."))
@@ -177,9 +188,14 @@ def _missing_voiceover_slide_numbers(
     notes_per_slide: List[str],
     *,
     personality: bool,
+    slide_numbers: Optional[List[int]] = None,
 ) -> List[int]:
     missing: List[int] = []
-    for slide_idx, notes_text in enumerate(notes_per_slide, start=1):
+    for idx, notes_text in enumerate(notes_per_slide, start=1):
+        # slide_numbers lets the caller keep real slide filenames (e.g.
+        # slide_04_voiceover.wav for --only-slide 4) even when the asset
+        # lists contain a subset of the deck.
+        slide_idx = slide_numbers[idx - 1] if slide_numbers else idx
         if not prepare_narration(notes_text, personality=personality):
             continue
         if not os.path.isfile(_voiceover_wav_path(output_dir, slide_idx)):
@@ -293,6 +309,7 @@ def _voiceover_paths_for_slides(
     api_base: Optional[str] = None,
     profile_id: Optional[str] = None,
     engine: Optional[str] = None,
+    slide_numbers: Optional[List[int]] = None,
 ) -> List[Optional[str]]:
     if gen_voiceover:
         if not api_base or not profile_id:
@@ -320,7 +337,8 @@ def _voiceover_paths_for_slides(
         print("\n🎙️  Using existing voiceover files (pass --gen-voiceover to regenerate)...")
 
     wav_paths: List[Optional[str]] = []
-    for slide_idx, notes_text in enumerate(notes_per_slide, start=1):
+    for idx, notes_text in enumerate(notes_per_slide, start=1):
+        slide_idx = slide_numbers[idx - 1] if slide_numbers else idx
         wav_path = _voiceover_wav_path(output_dir, slide_idx)
         narration = prepare_narration(notes_text, personality=personality)
 
@@ -368,6 +386,35 @@ def _voiceover_paths_for_slides(
     return wav_paths
 
 
+def _background_music_for_deck(
+    notes_per_slide: List[str],
+    override: Optional[str] = None,
+    enabled: bool = True,
+) -> Tuple[Optional[str], float]:
+    """Resolve the deck-level background-music track and its volume.
+
+    ``[bgm: ...]`` tags are presentation-scoped rather than per-slide: the
+    FIRST tag found across all speaker notes selects the one continuous track
+    layered under the entire assembled timeline. An explicit *override* (the
+    --bg-music flag) supersedes tags; *enabled=False* (--no-bg-music) turns
+    music off entirely even when tags are present.
+    """
+    if not enabled:
+        return None, DEFAULT_BG_MUSIC_VOLUME
+
+    if override:
+        return resolve_bgm_path(override), DEFAULT_BG_MUSIC_VOLUME
+
+    for notes in notes_per_slide:
+        cues = parse_bgm_cues(notes)
+        if cues:
+            ref, volume = cues[0]
+            resolved_volume = DEFAULT_BG_MUSIC_VOLUME if volume is None else volume
+            return resolve_bgm_path(ref), resolved_volume
+
+    return None, DEFAULT_BG_MUSIC_VOLUME
+
+
 def _render_videos(
     png_paths: List[str],
     wav_paths: List[Optional[str]],
@@ -379,6 +426,10 @@ def _render_videos(
     fps: int,
     inter_slide_pause_seconds: float,
     ken_burns_zoom: float = 0.0,
+    background_music_path: Optional[str] = None,
+    bg_music_volume: float = DEFAULT_BG_MUSIC_VOLUME,
+    transition: str = DEFAULT_TRANSITION_STYLE,
+    transition_seconds: float = DEFAULT_TRANSITION_SECONDS,
 ) -> List[str]:
     ranges = compute_slide_ranges(len(png_paths), split_points)
     created: List[str] = []
@@ -405,6 +456,10 @@ def _render_videos(
             fps=fps,
             inter_slide_pause_seconds=inter_slide_pause_seconds,
             ken_burns_zoom=ken_burns_zoom,
+            background_music_path=background_music_path,
+            bg_music_volume=bg_music_volume,
+            transition=transition,
+            transition_seconds=transition_seconds,
         )
         created.append(os.path.abspath(mp4_path))
     return created
@@ -477,6 +532,10 @@ def main(
     split_at: Optional[str] = None,
     ken_burns_zoom: float = DEFAULT_KEN_BURNS_ZOOM,
     engine: Optional[str] = None,
+    bg_music: Optional[str] = None,
+    no_bg_music: bool = False,
+    transition: str = DEFAULT_TRANSITION_STYLE,
+    transition_seconds: float = DEFAULT_TRANSITION_SECONDS,
 ) -> int:
     try:
         use_personality = (
@@ -514,14 +573,42 @@ def main(
             presentation_id = extract_presentation_id(source)
             process_google_slides(presentation_id, out_dir, only_slide=only_slide)
 
-        notes_per_slide = []
-        for note_path in _sorted_slide_assets(out_dir, "_notes.txt"):
-            with open(note_path, encoding="utf-8") as note_file:
-                notes_per_slide.append(note_file.read())
-
+        note_paths = _sorted_slide_assets(out_dir, "_notes.txt")
         png_paths = _sorted_slide_assets(out_dir, ".png")
         if not png_paths:
             raise RuntimeError("No slide PNGs were exported")
+
+        # --only-slide: the exported files keep the requested slide's real
+        # number (slide_04.png / slide_04_notes.txt), so stale assets from
+        # earlier runs under other numbers are ignored here and later reuse
+        # checks (voiceover lookup included) match the correct files.
+        if only_slide is not None:
+            note_paths = [
+                p
+                for p in note_paths
+                if _slide_number_from_name(p, "_notes.txt") == only_slide
+            ]
+            png_paths = [
+                p for p in png_paths if _slide_number_from_name(p, ".png") == only_slide
+            ]
+            if not png_paths:
+                raise RuntimeError(
+                    f"--only-slide {only_slide} produced no PNG export "
+                    "(is the slide number in range?)"
+                )
+
+        # Real slide numbers for each asset, so voiceover generation and
+        # reuse target the correct slide_XX_voiceover.wav even when the
+        # asset lists contain a subset of the deck.
+        slide_numbers = [
+            _slide_number_from_name(p, ".png") or idx + 1
+            for idx, p in enumerate(png_paths)
+        ]
+
+        notes_per_slide = []
+        for note_path in note_paths:
+            with open(note_path, encoding="utf-8") as note_file:
+                notes_per_slide.append(note_file.read())
 
         if export_only and not gen_voiceover:
             print(f"\n✅ Export complete (PNGs + notes) in {os.path.abspath(out_dir)}")
@@ -532,7 +619,10 @@ def main(
             generate_missing
             and bool(
                 _missing_voiceover_slide_numbers(
-                    out_dir, notes_per_slide, personality=use_personality
+                    out_dir,
+                    notes_per_slide,
+                    personality=use_personality,
+                    slide_numbers=slide_numbers,
                 )
             )
         )
@@ -553,6 +643,7 @@ def main(
             api_base=api_base,
             profile_id=voicebox_profile_id,
             engine=voicebox_engine,
+            slide_numbers=slide_numbers,
         )
         while len(wav_paths) < len(png_paths):
             wav_paths.append(None)
@@ -560,6 +651,12 @@ def main(
         if export_only:
             print(f"\n✅ Export complete (PNGs + WAVs) in {os.path.abspath(out_dir)}")
             return 0
+
+        background_music_path, bg_music_volume = _background_music_for_deck(
+            notes_per_slide,
+            override=bg_music,
+            enabled=not no_bg_music,
+        )
 
         created = _render_videos(
             png_paths,
@@ -572,6 +669,10 @@ def main(
             fps=fps,
             inter_slide_pause_seconds=inter_slide_pause_seconds,
             ken_burns_zoom=ken_burns_zoom,
+            background_music_path=background_music_path,
+            bg_music_volume=bg_music_volume,
+            transition=transition,
+            transition_seconds=transition_seconds,
         )
         if len(created) == 1:
             print(f"\n✅ Video saved: {created[0]}")
@@ -694,6 +795,45 @@ if __name__ == "__main__":
         ),
     )
 
+    bg_music_group = parser.add_mutually_exclusive_group()
+    bg_music_group.add_argument(
+        "--bg-music",
+        default=None,
+        metavar="TRACK",
+        help=(
+            "Background-music track overriding any [bgm: ...] note tags: a "
+            "bare name looked up under assets/ or a path to an .mp3/.wav"
+        ),
+    )
+    bg_music_group.add_argument(
+        "--no-bg-music",
+        action="store_true",
+        help="Ignore [bgm: ...] note tags; assemble without background music",
+    )
+
+    parser.add_argument(
+        "--transition",
+        choices=list(TRANSITION_STYLES),
+        default=DEFAULT_TRANSITION_STYLE,
+        help=(
+            "Effect at each slide change: 'dip-black' fades through black "
+            "(default), 'dip-white' flashes through white, 'crossfade' "
+            "still-dissolves between slides, 'none' hard-cuts. Every style "
+            "also fades out to black at the end; the first slide is fully "
+            "visible from frame 0."
+        ),
+    )
+    parser.add_argument(
+        "--transition-duration",
+        type=float,
+        default=DEFAULT_TRANSITION_SECONDS,
+        metavar="SECONDS",
+        help=(
+            "Length of each slide transition and of the opener/closer fades "
+            f"(default: {DEFAULT_TRANSITION_SECONDS}; 0 disables transitions)"
+        ),
+    )
+
     args = parser.parse_args()
 
     sys.exit(
@@ -711,5 +851,9 @@ if __name__ == "__main__":
             split_at=args.split_at,
             ken_burns_zoom=DEFAULT_KEN_BURNS_ZOOM if args.ken_burns else 0.0,
             engine=args.engine,
+            bg_music=args.bg_music,
+            no_bg_music=args.no_bg_music,
+            transition=args.transition,
+            transition_seconds=args.transition_duration,
         )
     )
