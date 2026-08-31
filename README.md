@@ -207,7 +207,9 @@ python deck_to_video.py --version   # deck_to_video v0.3.0
 ### Common options
 
 ```bash
-# Process one slide for a quick test
+# Render a single slide into its own video (does NOT touch the full deck's MP4).
+# That slide's files keep their real number, so a previous run's voiceover for
+# slide 3 is reused correctly; pass --gen-voiceover to regenerate narration.
 python deck_to_video.py my_deck.pptx --only-slide 3
 
 # Export PNGs and notes only (skip video assembly)
@@ -238,7 +240,7 @@ python deck_to_video.py my_deck.pptx --transition none   # hard cuts, no transit
 | `--profile-id` | Voicebox profile UUID (overrides `.env`) |
 | `--voicebox-url` | Voicebox API base URL (default: `http://127.0.0.1:17493`) |
 | `--engine NAME` | TTS engine, overriding the profile's Default Engine (`qwen`, `qwen_custom_voice`, `luxtts`, `chatterbox`, `chatterbox_turbo`, `tada`, `kokoro`) |
-| `--only-slide N` | Process a single slide (1-based index) |
+| `--only-slide N` | Process a single slide (1-based index). Only that slide is exported and rendered, producing one MP4 named `<deck>-slide-NN.mp4` (the full deck's video is never overwritten). The slide's files keep their real number (`slide_NN.png` / `slide_NN_notes.txt` / `slide_NN_voiceover.wav`), so a previous run's voiceover for that slide is reused correctly; pass `--gen-voiceover` to regenerate it |
 | `-o`, `--output` | Output MP4 path |
 | `--export-only` | Export PNGs and notes; skip MP4 assembly |
 | `--gen-voiceover` | Generate voiceover WAVs via Voicebox (default: reuse existing files) |

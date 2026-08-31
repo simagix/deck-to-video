@@ -171,7 +171,11 @@ def export_slides_to_png(
             continue
 
         export_index += 1
-        fname = os.path.join(output_dir, f"slide_{export_index:02d}.png")
+        # Keep the real slide number in the filename for --only-slide so
+        # existing files map to the correct slide; otherwise a full-run
+        # number would overlap with an only-slide export.
+        fname_index = index + 1 if only_slide is not None else export_index
+        fname = os.path.join(output_dir, f"slide_{fname_index:02d}.png")
         if os.path.isfile(fname):
             print(f"   ✅ Slide {index + 1}: using existing {os.path.basename(fname)}")
             reused_images += 1
@@ -285,6 +289,7 @@ def export_speaker_notes(
     notes_per_slide_list: List[str] = []
 
     export_index = 0
+    exported_nums: List[int] = []
     for slide_idx, slide in enumerate(slides):
         slide_num = slide_idx + 1
         if only_slide is not None and slide_num != only_slide:
@@ -294,6 +299,10 @@ def export_speaker_notes(
             continue
 
         export_index += 1
+        # Keep the real slide number in the filename for --only-slide so
+        # notes, PNGs, and voiceovers stay aligned by slide number.
+        file_num = only_slide if only_slide is not None else export_index
+        exported_nums.append(file_num)
         try:
             slide_properties = slide.get("slideProperties", {}) or {}
             notes_page = slide_properties.get("notesPage", {}) or {}
@@ -322,8 +331,8 @@ def export_speaker_notes(
             notes_file_handle.write("\n".join(notes_lines))
         print(f"\n✅ Exported all notes to: {notes_file}")
 
-    for file_idx, notes_text in enumerate(notes_per_slide_list, start=1):
-        note_path = os.path.join(output_dir, f"slide_{file_idx:02d}_notes.txt")
+    for file_num, notes_text in zip(exported_nums, notes_per_slide_list):
+        note_path = os.path.join(output_dir, f"slide_{file_num:02d}_notes.txt")
         with open(note_path, "w", encoding="utf-8") as note_file_handle:
             note_file_handle.write(notes_text)
 

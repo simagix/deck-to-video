@@ -153,6 +153,12 @@ def _sorted_slide_assets(output_dir: str, suffix: str) -> List[str]:
     return [path for _, path in paths]
 
 
+def _slide_number_from_name(path: str, suffix: str) -> Optional[int]:
+    """Extract the 1-based slide number embedded in an exported asset name."""
+    match = re.match(rf"^slide_(\d{{2}}){re.escape(suffix)}$", os.path.basename(path))
+    return int(match.group(1)) if match else None
+
+
 def _sanitize_title_for_path(title: str) -> str:
     sanitized = title.replace(" ", "_").replace("/", "_").replace("\\", "_")
     return "".join(char for char in sanitized if char.isalnum() or char in ("_", "-", "."))
@@ -182,9 +188,14 @@ def _missing_voiceover_slide_numbers(
     notes_per_slide: List[str],
     *,
     personality: bool,
+    slide_numbers: Optional[List[int]] = None,
 ) -> List[int]:
     missing: List[int] = []
-    for slide_idx, notes_text in enumerate(notes_per_slide, start=1):
+    for idx, notes_text in enumerate(notes_per_slide, start=1):
+        # slide_numbers lets the caller keep real slide filenames (e.g.
+        # slide_04_voiceover.wav for --only-slide 4) even when the asset
+        # lists contain a subset of the deck.
+        slide_idx = slide_numbers[idx - 1] if slide_numbers else idx
         if not prepare_narration(notes_text, personality=personality):
             continue
         if not os.path.isfile(_voiceover_wav_path(output_dir, slide_idx)):
@@ -298,6 +309,7 @@ def _voiceover_paths_for_slides(
     api_base: Optional[str] = None,
     profile_id: Optional[str] = None,
     engine: Optional[str] = None,
+    slide_numbers: Optional[List[int]] = None,
 ) -> List[Optional[str]]:
     if gen_voiceover:
         if not api_base or not profile_id:
@@ -325,7 +337,8 @@ def _voiceover_paths_for_slides(
         print("\n🎙️  Using existing voiceover files (pass --gen-voiceover to regenerate)...")
 
     wav_paths: List[Optional[str]] = []
-    for slide_idx, notes_text in enumerate(notes_per_slide, start=1):
+    for idx, notes_text in enumerate(notes_per_slide, start=1):
+        slide_idx = slide_numbers[idx - 1] if slide_numbers else idx
         wav_path = _voiceover_wav_path(output_dir, slide_idx)
         narration = prepare_narration(notes_text, personality=personality)
 
@@ -560,14 +573,42 @@ def main(
             presentation_id = extract_presentation_id(source)
             process_google_slides(presentation_id, out_dir, only_slide=only_slide)
 
-        notes_per_slide = []
-        for note_path in _sorted_slide_assets(out_dir, "_notes.txt"):
-            with open(note_path, encoding="utf-8") as note_file:
-                notes_per_slide.append(note_file.read())
-
+        note_paths = _sorted_slide_assets(out_dir, "_notes.txt")
         png_paths = _sorted_slide_assets(out_dir, ".png")
         if not png_paths:
             raise RuntimeError("No slide PNGs were exported")
+
+        # --only-slide: the exported files keep the requested slide's real
+        # number (slide_04.png / slide_04_notes.txt), so stale assets from
+        # earlier runs under other numbers are ignored here and later reuse
+        # checks (voiceover lookup included) match the correct files.
+        if only_slide is not None:
+            note_paths = [
+                p
+                for p in note_paths
+                if _slide_number_from_name(p, "_notes.txt") == only_slide
+            ]
+            png_paths = [
+                p for p in png_paths if _slide_number_from_name(p, ".png") == only_slide
+            ]
+            if not png_paths:
+                raise RuntimeError(
+                    f"--only-slide {only_slide} produced no PNG export "
+                    "(is the slide number in range?)"
+                )
+
+        # Real slide numbers for each asset, so voiceover generation and
+        # reuse target the correct slide_XX_voiceover.wav even when the
+        # asset lists contain a subset of the deck.
+        slide_numbers = [
+            _slide_number_from_name(p, ".png") or idx + 1
+            for idx, p in enumerate(png_paths)
+        ]
+
+        notes_per_slide = []
+        for note_path in note_paths:
+            with open(note_path, encoding="utf-8") as note_file:
+                notes_per_slide.append(note_file.read())
 
         if export_only and not gen_voiceover:
             print(f"\n✅ Export complete (PNGs + notes) in {os.path.abspath(out_dir)}")
@@ -578,7 +619,10 @@ def main(
             generate_missing
             and bool(
                 _missing_voiceover_slide_numbers(
-                    out_dir, notes_per_slide, personality=use_personality
+                    out_dir,
+                    notes_per_slide,
+                    personality=use_personality,
+                    slide_numbers=slide_numbers,
                 )
             )
         )
@@ -599,6 +643,7 @@ def main(
             api_base=api_base,
             profile_id=voicebox_profile_id,
             engine=voicebox_engine,
+            slide_numbers=slide_numbers,
         )
         while len(wav_paths) < len(png_paths):
             wav_paths.append(None)

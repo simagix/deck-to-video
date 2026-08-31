@@ -146,12 +146,12 @@ def _pdf_pages_to_png(
 
     target_width = TARGET_IMAGE_SIZE[0]
     final_paths: List[str] = []
-    for out_index, page_num in enumerate(page_numbers, start=1):
+    for page_num in page_numbers:
         page = pdf[page_num - 1]
         width, _height = page.get_size()
         scale = target_width / width if width > 0 else 2.0
         bitmap = page.render(scale=scale)
-        dest_path = os.path.join(output_dir, f"slide_{out_index:02d}.png")
+        dest_path = os.path.join(output_dir, f"slide_{page_num:02d}.png")
         bitmap.to_pil().save(dest_path)
         final_paths.append(dest_path)
 
@@ -197,7 +197,7 @@ def _expected_slide_png_paths(
     only_slide: Optional[int] = None,
 ) -> List[str]:
     if only_slide is not None:
-        return [os.path.join(output_dir, "slide_01.png")]
+        return [os.path.join(output_dir, f"slide_{only_slide:02d}.png")]
     return [
         os.path.join(output_dir, f"slide_{index:02d}.png")
         for index in range(1, slide_count + 1)
@@ -242,15 +242,9 @@ def export_pptx_slides_to_png(
         resize_slide_png(png_path)
         saved += 1
 
-    if only_slide is not None:
-        # Renumber the single exported slide to slide_01.png for downstream consistency.
-        expected = os.path.join(output_dir, "slide_01.png")
-        source = png_paths[0] if png_paths else None
-        if source and source != expected:
-            if os.path.isfile(expected):
-                os.remove(expected)
-            os.rename(source, expected)
-        saved = 1 if os.path.isfile(expected) else 0
+    # With --only-slide, the exported page already lands on its real slide
+    # number (e.g. slide_04.png), so downstream reuse checks and voiceover
+    # lookup match the correct files.
 
     print(f"Exported {saved} slide image(s) to {output_dir}")
     return saved
@@ -286,7 +280,7 @@ def export_pptx_speaker_notes(
 
     for file_idx, notes_text in enumerate(export_notes, start=1):
         slide_num = only_slide if only_slide is not None else file_idx
-        note_path = os.path.join(output_dir, f"slide_{file_idx:02d}_notes.txt")
+        note_path = os.path.join(output_dir, f"slide_{slide_num:02d}_notes.txt")
         with open(note_path, "w", encoding="utf-8") as note_file:
             note_file.write(notes_text)
         if notes_text:
