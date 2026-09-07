@@ -113,12 +113,20 @@ try:
     from split_ranges import compute_slide_ranges, parse_split_at, video_label_for_range
     from sfx import SFX_SAMPLES, assemble_voiceover
     from video_assembly import TRANSITION_STYLES, assemble_presentation_video
+
+    # Narration engine: one-voice (default) or Voicebox (--voicebox flag)
+    # one-voice is imported lazily; voicebox_client is kept for --voicebox mode
     from voicebox_client import (
         SUPPORTED_ENGINES,
         generate_voicebox_audio,
         get_voicebox_config,
         personality_enabled_from_env,
     )
+    try:
+        from one_voice_adapter import generate_one_voice_audio, get_one_voice_config
+        _one_voice_available = True
+    except ImportError:
+        _one_voice_available = False
 except ImportError as exc:
     sys.stderr.write(
         f"\n❌ Missing Python dependency ({exc}).\n"
@@ -217,20 +225,32 @@ def _generate_voiceover_take(
     profile_id: str,
     personality: bool,
     engine: Optional[str],
+    use_voicebox: bool = False,
 ) -> bool:
-    """Synthesize one narration take via Voicebox; False when nothing to say."""
+    """Synthesize one narration take. Uses Voicebox or one-voice based on use_voicebox."""
     narration_text = prepare_narration(source, personality=personality)
     if not narration_text.strip():
         return False
-    generate_voicebox_audio(
-        _ensure_terminal_punctuation(narration_text),
-        profile_id=profile_id,
-        output_wav=output_wav,
-        api_base=api_base,
-        personality=personality,
-        engine=engine,
-        instruct=_first_tone_instruct(source),
-    )
+    text = _ensure_terminal_punctuation(narration_text)
+    instruct = _first_tone_instruct(source)
+
+    if use_voicebox:
+        generate_voicebox_audio(
+            text,
+            profile_id=profile_id,
+            output_wav=output_wav,
+            api_base=api_base,
+            personality=personality,
+            engine=engine,
+            instruct=instruct,
+        )
+    else:
+        generate_one_voice_audio(
+            text,
+            profile_id=profile_id,
+            output_wav=output_wav,
+            instruct=instruct,
+        )
     return True
 
 
@@ -242,6 +262,7 @@ def _generate_voiceover_for_slide(
     profile_id: str,
     personality: bool,
     engine: Optional[str] = None,
+    use_voicebox: bool = False,
 ) -> Optional[str]:
     if not prepare_narration(notes_text, personality=personality):
         print(
@@ -254,10 +275,10 @@ def _generate_voiceover_for_slide(
     parts = split_notes_on_sfx(notes_text, supported=set(SFX_SAMPLES))
 
     if not any(part["kind"] == "sfx" for part in parts):
-        # Single-take path (no sound-effect cues): one Voicebox call, exactly
-        # as before. The take keeps the first tone found anywhere in the notes.
+        # Single-take path (no sound-effect cues): one narration call.
+        # The take keeps the first tone found anywhere in the notes.
         if not _generate_voiceover_take(
-            notes_text, wav_path, api_base, profile_id, personality, engine
+            notes_text, wav_path, api_base, profile_id, personality, engine, use_voicebox
         ):
             print(f"   ⏭️  Slide {slide_idx}: no narration after prep")
             return None
@@ -290,6 +311,7 @@ def _generate_voiceover_for_slide(
                 profile_id,
                 personality,
                 engine,
+                use_voicebox,
             ):
                 pieces.append(("wav", take_path))
         inserted = assemble_voiceover(pieces, wav_path)
@@ -310,26 +332,31 @@ def _voiceover_paths_for_slides(
     profile_id: Optional[str] = None,
     engine: Optional[str] = None,
     slide_numbers: Optional[List[int]] = None,
+    use_voicebox: bool = False,
 ) -> List[Optional[str]]:
     if gen_voiceover:
-        if not api_base or not profile_id:
-            raise RuntimeError("Voicebox config is required when using --gen-voiceover")
-        print(f"\n🎙️  Generating voiceovers via Voicebox ({api_base})...")
+        if not profile_id:
+            raise RuntimeError(
+                "Voice configuration is required when using --gen-voiceover"
+            )
+        engine_name = "Voicebox" if use_voicebox else "one-voice"
+        print(f"\n🎙️  Generating voiceovers via {engine_name}...")
     elif generate_missing:
         missing = _missing_voiceover_slide_numbers(
             output_dir, notes_per_slide, personality=personality
         )
         if missing:
-            if not api_base or not profile_id:
+            if not profile_id:
                 slides = ", ".join(str(idx) for idx in missing)
                 raise RuntimeError(
                     f"Missing voiceover WAV(s) for slide(s) {slides}. "
                     "Set VOICEBOX_PROFILE_ID in .env (or pass --profile-id), "
                     "or pass --gen-voiceover to generate them."
                 )
+            engine_name = "Voicebox" if use_voicebox else "one-voice"
             print(
                 f"\n🎙️  Generating missing voiceovers for slide(s) "
-                f"{', '.join(str(idx) for idx in missing)} via Voicebox ({api_base})..."
+                f"{', '.join(str(idx) for idx in missing)} via {engine_name}..."
             )
         else:
             print("\n🎙️  Using existing voiceover files (pass --gen-voiceover to regenerate)...")
@@ -352,6 +379,7 @@ def _voiceover_paths_for_slides(
                     profile_id,
                     personality,
                     engine=engine,
+                    use_voicebox=use_voicebox,
                 )
             )
             continue
@@ -371,6 +399,7 @@ def _voiceover_paths_for_slides(
                     profile_id,
                     personality,
                     engine=engine,
+                    use_voicebox=use_voicebox,
                 )
             )
             continue
@@ -528,6 +557,7 @@ def main(
     personality: Optional[bool] = None,
     fps: int = DEFAULT_FPS,
     voicebox_url: Optional[str] = None,
+    use_voicebox: bool = False,
     inter_slide_pause_seconds: float = DEFAULT_INTER_SLIDE_PAUSE_SECONDS,
     split_at: Optional[str] = None,
     ken_burns_zoom: float = DEFAULT_KEN_BURNS_ZOOM,
@@ -546,6 +576,34 @@ def main(
         api_base: Optional[str] = None
         voicebox_profile_id: Optional[str] = None
         voicebox_engine: Optional[str] = None
+
+        # Resolve narration engine: one-voice (default) or Voicebox (--voicebox)
+        if use_voicebox:
+            # Legacy: Voicebox API — resolve full config
+            api_base, voicebox_profile_id, voicebox_engine = get_voicebox_config(
+                profile_id_override=profile_id,
+                engine_override=engine,
+            )
+        else:
+            # Default: one-voice local TTS
+            if not _one_voice_available:
+                print(
+                    "\n⚠️  one-voice not installed. Falling back to Voicebox.\n"
+                    "Install one-voice for local TTS:\n"
+                    "  pip install one-voice@git+https://github.com/simagix/one-voice.git\n"
+                )
+                use_voicebox = True
+                api_base, voicebox_profile_id, voicebox_engine = get_voicebox_config(
+                    profile_id_override=profile_id,
+                    engine_override=engine,
+                )
+            else:
+                voice_name, _ = get_one_voice_config(
+                    profile_id_override=profile_id,
+                )
+                voicebox_profile_id = voice_name
+                voicebox_engine = None
+                api_base = ""
 
         split_points: Optional[List[int]] = None
         if split_at:
@@ -626,14 +684,6 @@ def main(
                 )
             )
         )
-        if needs_voicebox:
-            api_base, voicebox_profile_id, voicebox_engine = get_voicebox_config(
-                profile_id,
-                engine_override=engine,
-            )
-            if voicebox_url:
-                api_base = voicebox_url.rstrip("/")
-
         wav_paths = _voiceover_paths_for_slides(
             out_dir,
             notes_per_slide,
@@ -644,6 +694,7 @@ def main(
             profile_id=voicebox_profile_id,
             engine=voicebox_engine,
             slide_numbers=slide_numbers,
+            use_voicebox=use_voicebox,
         )
         while len(wav_paths) < len(png_paths):
             wav_paths.append(None)
@@ -718,6 +769,14 @@ if __name__ == "__main__":
             "TTS engine to use, overriding the profile's Default Engine. "
             f"One of: {', '.join(SUPPORTED_ENGINES)} (default: the profile's "
             "Default Engine, or VOICEBOX_ENGINE in .env)"
+        ),
+    )
+    parser.add_argument(
+        "--voicebox",
+        action="store_true",
+        help=(
+            "Use Voicebox API for narration instead of one-voice local TTS "
+            "(default: one-voice)"
         ),
     )
     parser.add_argument(
@@ -847,6 +906,7 @@ if __name__ == "__main__":
             personality=args.personality,
             fps=args.fps,
             voicebox_url=args.voicebox_url,
+            use_voicebox=args.voicebox,
             inter_slide_pause_seconds=args.inter_slide_pause,
             split_at=args.split_at,
             ken_burns_zoom=DEFAULT_KEN_BURNS_ZOOM if args.ken_burns else 0.0,
