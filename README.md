@@ -1,20 +1,25 @@
 # deck-to-video
 
-Turn a presentation deck into a narrated MP4 video. Export slides and speaker notes from a local **PPTX** file, generate voiceover audio with a local **[Voicebox](https://github.com/jamiepine/voicebox)** instance, and assemble everything into video with MoviePy.
+Turn a presentation deck into a narrated MP4 video. Export slides and speaker
+notes from a local **PPTX** file, generate voiceover audio with a local TTS
+engine — **[one-voice](https://github.com/simagix/one-voice)** (Qwen3-TTS on
+Apple Silicon, the default) or **[Voicebox](https://github.com/jamiepine/voicebox)**
+— and assemble everything into video with MoviePy.
 
 > Google Slides IDs/URLs are also accepted, but PPTX is the recommended and fully documented workflow — see [Google Slides support (optional)](#google-slides-support-optional).
 
 <!-- ADD VISUALIZATION HERE -->
-![A flowchart showing the Deck-to-Video pipeline: input presentation (Google Slides or PPTX), output of extracted images and notes, voiceover processing via Voicebox (optionally with a Cloned Signature Voice Profile UUID and --personality flag), and video assembly by MoviePy, leading to the final 1080p MP4.](workflow_diagram.png)
+![A flowchart showing the Deck-to-Video pipeline: input presentation (Google Slides or PPTX), output of extracted images and notes, voiceover processing via the local one-voice TTS engine (or the Voicebox fallback, optionally with a cloned signature voice), and video assembly by MoviePy, leading to the final 1080p MP4.](workflow_diagram.png)
 
 ## Features
 
 - **PPTX** — render slides locally with LibreOffice and read embedded speaker notes
-- **Voiceover** — synthesize narration from speaker notes using Voicebox
+- **Voiceover** — synthesize narration from speaker notes with local one-voice (Qwen3-TTS, Apple Silicon) or Voicebox (`--voicebox`)
+- **Voice & tone tags** — direct a single slide (or even a paragraph mid-slide) to a cloned voice / style with `[voice: NAME | tone: TAG]`; the tone direction is spoken by one-voice and auto-leak-trimmed, or sent as a rich `instruct` to Voicebox
 - **Punchline sound effects** — tag jokes with `[sfx: rimshot]` (*Ba Dum Tss*) or `[sfx: sad_trombone]` (*wah-wah-waaah*) right after the punchline
 - **Background music** — drop one `[bgm: ambient_loop]` tag anywhere in your speaker notes to soundtrack the entire video under the narration
 - **Google Slides (optional)** — also accepts Google Slides IDs/URLs via the Google Drive API (requires OAuth credentials)
-- **Cloned voice / signature narrator** — generate every voiceover with a Voicebox-cloned voice for a consistent, recognizable brand voice across a series
+- **Cloned voice / signature narrator** — generate every voiceover with a cloned voice for a consistent, recognizable brand voice across a series (a one-voice voice profile or a Voicebox clone)
 - **Video assembly** — combine slides and audio into 1080p MP4 files
 - **Slide transitions** — a quick dip-to-black at each slide change (or dip-to-white / still-dissolve crossfade), plus a fade-through-black closer; the first slide stays fully visible from frame 0; `--transition none` for hard cuts
 - **Flexible output** — export assets only, process a single slide, split into multiple videos, or customize FPS and pauses
@@ -24,10 +29,16 @@ Turn a presentation deck into a narrated MP4 video. Export slides and speaker no
 | Requirement | When needed |
 |-------------|-------------|
 | Python 3.12+ | Always |
-| [Voicebox](https://github.com/jamiepine/voicebox) (desktop app) | Only when using `--gen-voiceover` |
+| Apple Silicon (Metal GPU) | one-voice narration (default) |
+| [one-voice](https://github.com/simagix/one-voice) package | one-voice narration (included in `requirements.txt`; Apple-Silicon sibling repo with `voices/`) |
+| [Voicebox](https://github.com/jamiepine/voicebox) desktop app | Only when using `--voicebox` |
 | [LibreOffice](https://www.libreoffice.org/) (`soffice` on `PATH`) | PPTX input (required) |
 
 MoviePy bundles FFmpeg via `imageio-ffmpeg`, so you do not need to install FFmpeg separately.
+
+Narration defaults to the **one-voice** engine (Qwen3-TTS on Apple Silicon). On
+other platforms, or if you prefer voice cloning inside the Voicebox app, pass
+`--voicebox` (requires the Voicebox desktop app running; its API is <localhost>).
 
 Google Slides input additionally needs Google Cloud OAuth credentials — see [Google Slides support (optional)](#google-slides-support-optional).
 
@@ -46,7 +57,42 @@ brew install --cask libreoffice   # macOS — see https://www.libreoffice.org/ f
 
 ## Configuration
 
-### Voicebox
+All configuration lives in a `.env` file at the project root — copy
+[`.env.example`](.env.example) and fill in your values. `.env` is git-ignored;
+`.env.example` is the checked-in template.
+
+### One-voice (default narration engine)
+
+`--gen-voiceover` synthesizes narration with the **one-voice** engine
+(Qwen3-TTS on Apple Silicon) unless you pass `--voicebox`. The voice search
+path is auto-configured on import: this repo's `voices/` (project-specific,
+e.g. `simone`) plus the installed one-voice package's `voices/` (base voices
+like `golding`, `neufeld`). Leftmost wins when the same name exists in both.
+
+Create a `.env` file in the project root to override the default voice and/or
+the search path:
+
+```env
+# Voice used when a slide has no [voice: ...] tag (defaults to the first
+# available voice profile).
+ONE_VOICE=simone
+
+# Optional: colon-separated list of directories to search for voices.
+# Defaults to this repo's voices/ + the installed one-voice package's voices/.
+ONE_VOICE_PATH=/path/to/voices:/another/voices/dir
+```
+
+List available voice profiles (from the one-voice tool itself):
+
+```bash
+one-voice voices
+```
+
+There is no server to start — one-voice runs locally and shares MLX with this
+repo (Apple Silicon only). For non-Apple-Silicon machines, or if you prefer
+voice cloning inside the Voicebox app, use `--voicebox` (next section).
+
+### Voicebox (optional; `--voicebox`)
 
 1. Start the Voicebox desktop app.
 2. Create a `.env` file in the project root:
@@ -85,23 +131,44 @@ You can also pass `--profile-id` on the command line instead of using `.env`.
 
 #### Using a cloned voice (signature / branding)
 
-Voicebox can **clone** a voice from a short reference recording (or your own) and synthesize speech that matches it. Using a cloned voice is the recommended way to give a video series a consistent, recognizable **signature** — the same narrator voice across every video, so audiences associate it with your brand or creator.
+A cloned voice keeps a video series recognizable: the same narrator across
+every video, so audiences associate it with your brand or creator. Cloning
+works in both engines:
 
-1. In the Voicebox desktop app, clone a voice: record a short clip (or supply a reference audio file) of the target speaker, and name the resulting clone.
-2. Find the clone's profile UUID — list profiles with `curl http://127.0.0.1:17493/profiles`.
-3. Point the tool at that clone:
+- **one-voice (default):** a "voice profile" is a directory with a short
+  reference recording. Add `voices/<name>/reference.wav` (optionally a
+  `voice.yaml` with a description); the voice then appears in
+  `one-voice voices` and can be selected with `ONE_VOICE`, `--profile-id
+  <name>`, or a `[voice: <name>]` tag.
+- **Voicebox (`--voicebox`):** clone a voice in the desktop app, find its
+  profile UUID, and point the tool at that clone:
 
 ```env
 VOICEBOX_PROFILE_ID=your-clone-uuid
 ```
 
-Every voiceover generated by `--gen-voiceover` is then synthesized in that cloned voice. Because the clone UUID stays the same across projects, all your videos share one signature voice.
+Because the profile persists across projects, all your videos share one
+signature voice.
 
-> **Tip:** combine a clone with the `--personality` flag — the speaker notes are rewritten in the profile's voice first, then spoken by the clone, which reinforces the signature character even more.
+> **Tip (Voicebox only):** combine a clone with the `--personality` flag — the
+> speaker notes are rewritten in the profile's voice first, then spoken by the
+> clone, which reinforces the signature character even more.
 
 ### Voice & tone tags (optional)
 
-You can steer the delivery of a single slide's voiceover by tagging your speaker notes with a light, human-friendly syntax. The tags are **metadata** — they are stripped from the text sent to Voicebox and instead translated into a rich style `instruct` on the `/generate` payload, so the author only writes a short keyword while the tool sends a full instruction.
+You can steer the delivery of a single slide's voiceover by tagging your
+speaker notes with a light, human-friendly syntax. The tags are **metadata** —
+they are stripped from the text sent to the TTS engine:
+
+- **one-voice (default):** each `voice:` names a real voice profile to clone
+  from (the project's `voices/` + the installed one-voice package's `voices/`);
+  each `tone:` becomes an in-band direction spoken by the model and manually
+  trimmed out (see below).
+- **Voicebox (`--voicebox`):** `voice:` is a convenience label in the text; the
+  actual speaker is still chosen by `VOICEBOX_PROFILE_ID` / `--profile-id`.
+  Each `tone:` is translated into a rich style `instruct` on the `/generate`
+  payload, so the author only writes a short keyword while the tool sends a
+  full instruction.
 
 ```text
 [voice: Spirit | tone: frustrated]
@@ -117,12 +184,28 @@ Hi... I'm Simone... the Hatchet assistant.
 My typical workday begins long... before I even log on.
 ```
 
-- `voice` is a convenience label; the actual speaker is still chosen by `VOICEBOX_PROFILE_ID` / `--profile-id`.
-- `tone` maps to one of the 28 built-in tones below and becomes the Voicebox `instruct`.
-- Tags are **sticky** within a slide: paragraphs after a tag keep that voice & tone until the next tag. A tag that sets only `voice` or only `tone` leaves the other dimension unchanged.
-- Tags are fully optional. Untagged speaker notes behave exactly as before (no `instruct` is sent).
+- `voice` — with one-voice (default) this selects a real voice profile from
+  the search path (falls back to `ONE_VOICE` / the first available profile).
+  With `--voicebox` it is a convenience label; the actual speaker is still
+  chosen by `VOICEBOX_PROFILE_ID` / `--profile-id`.
+- `tone` — maps to one of the 28 built-in tones below. With one-voice it becomes
+  an in-band direction that is leak-trimmed from the audio; with Voicebox it
+  becomes the `/generate` `instruct`.
+- Tags are **sticky** within a slide: the last tag's voice & tone persist until
+  changed or the block ends. A tag that sets only `voice` or only `tone`
+  leaves the other dimension unchanged. Multi-voice/multi-tone slides
+  generate one take per block (`slide_XX_voiceover.wav` is assembled from the
+  pieces).
+- Tags are fully optional. Untagged speaker notes behave exactly as before (no
+  tone direction is sent).
 
-The full tone vocabulary lives in `narration.py` (`TONES`), including `neutral`, `professional`, `friendly`, `warm`, `cheerful`, `excited`, `enthusiastic`, `confident`, `serious`, `concerned`, `frustrated`, `angry`, `sad`, `disappointed`, `surprised`, `confused`, `curious`, `skeptical`, `sarcastic`, `humorous`, `witty`, `dramatic`, `mysterious`, `narrative`, `explainer`, `whisper`, `robotic`, and `urgent`.
+The full tone vocabulary lives in `narration.py` (`TONES`), including
+`neutral`, `professional`, `friendly`, `warm`, `cheerful`, `excited`,
+`enthusiastic`, `confident`, `serious`, `concerned`, `frustrated`, `angry`,
+`sad`, `disappointed`, `surprised`, `confused`, `curious`, `skeptical`,
+`sarcastic`, `humorous`, `witty`, `dramatic`, `mysterious`, `narrative`,
+`explainer`, `whisper`, `robotic`, and `urgent` (matching one-voice's own
+`TONES` vocabulary of 31, a superset of these 28).
 
 To inspect the exact JSON that will be sent for a notes file, run:
 
@@ -133,7 +216,7 @@ python show_voicebox_payload.py out/<deck>/slide_01_notes.txt
 ### Sound effect tags (punchlines)
 
 Drop a bracketed SFX tag right after a punchline — even mid-slide with more
-narration following. The notes are split at the tag into separate Voicebox
+narration following. The notes are split at the tag into separate narration
 takes, and the sample is spliced exactly between them (after a short comedic
 beat, ~0.25s), so the hit lands precisely where the tag sat in the text:
 
@@ -151,8 +234,8 @@ Twice.
 - **Rimshot** — `[sfx: rimshot]`, `[badumtss]`, `[ba dum tss]`, `[rimshot]` all play *Ba Dum Tss*. **Sad trombone** — `[sfx: sad_trombone]`, `[sad trombone]`, `[wah wah wah]`. **Drum roll** — `[sfx: drum_roll]`, `[drumroll]`, `[drum roll]` rolls for ~4s, so place it *before* the reveal (`And the winner is… [drumroll] …you!`) to build tension into the punchline. Multiple tags per slide are supported.
 - **Sample resolution:** your `assets/ba_dum_tss.wav` always wins; `ba_dum_tss_default.wav` is only a fallback so fresh clones work out of the box (`make_sfx_assets.py` regenerates it without ever touching yours).
 - **Stereo survives the splice:** if your sample has more channels than the narration, the slide WAV is upgraded to match and the voice duplicated across channels — a true-stereo rimshot keeps its left/right image (dual-mono recordings are unaffected).
-- Each take keeps its own `[voice:` / `[tone:]` context as its style instruct (the example above speaks the setup angry and the follow-up dramatic). Slides with tags make one extra Voicebox call per split.
-- Tags are stripped from the text sent to Voicebox (never read aloud); unknown names are ignored safely.
+- Each take keeps its own `[voice:` / `[tone:]` context as its style instruct (the example above speaks the setup angry and the follow-up dramatic). Slides with voice/tone tags make one extra TTS call per split.
+- Tags are stripped from the text sent to the TTS engine (never read aloud); unknown names are ignored safely.
 - The result is baked into `slide_XX_voiceover.wav` at generation time, so video assembly needs no changes and cached-WAV reuse keeps working. Re-run with `--gen-voiceover` after adding or editing a tag.
 - **Your own recording:** drop `assets/ba_dum_tss.wav` (convert any licensed rimshot to WAV) and it takes precedence over the synthesized default in `ba_dum_tss_default.wav`, which `make_sfx_assets.py` regenerates without ever touching your file.
 
@@ -181,7 +264,7 @@ Welcome, everyone. Today we automate the boring parts.
 - **CLI escape hatches:** `--bg-music TRACK` overrides every tag; mutually
   exclusive `--no-bg-music` silences the deck regardless of notes. A typo'd
   track fails loudly instead of rendering silently missing its score.
-- Tags are stripped from the text sent to Voicebox (never read aloud).
+- Tags are stripped from the text sent to the TTS engine (never read aloud).
 
 ## Usage
 
@@ -191,7 +274,8 @@ Welcome, everyone. Today we automate the boring parts.
 # Local PPTX
 python deck_to_video.py my_deck.pptx
 
-# Generate voiceovers (first run, or when notes changed)
+# Generate voiceovers (first run, or when notes changed).
+# Defaults to the local one-voice engine; --voicebox switches to the Voicebox app.
 python deck_to_video.py my_deck.pptx --gen-voiceover
 
 # Rebuild video only — reuses existing slide_XX_voiceover.wav files
@@ -201,7 +285,7 @@ python deck_to_video.py my_deck.pptx
 python deck_to_video.py my_deck.pptx -o presentation.mp4
 
 # Show the installed version
-python deck_to_video.py --version   # deck_to_video v0.3.0
+python deck_to_video.py --version   # deck_to_video v0.3.2
 ```
 
 ### Common options
@@ -237,13 +321,14 @@ python deck_to_video.py my_deck.pptx --transition none   # hard cuts, no transit
 | Flag | Description |
 |------|-------------|
 | `source` | Path to a `.pptx` file (Google Slides ID/URL also accepted) |
-| `--profile-id` | Voicebox profile UUID (overrides `.env`) |
+| `--profile-id` | one-voice voice name (`--profile-id simone`) or a Voicebox profile UUID (overrides `.env`) |
+| `--voicebox` | Use the Voicebox API for narration instead of the default one-voice local TTS |
+| `--engine NAME` | Voicebox TTS engine, overriding the profile's Default Engine (`qwen`, `qwen_custom_voice`, `luxtts`, `chatterbox`, `chatterbox_turbo`, `tada`, `kokoro`); ignored by one-voice |
 | `--voicebox-url` | Voicebox API base URL (default: `http://127.0.0.1:17493`) |
-| `--engine NAME` | TTS engine, overriding the profile's Default Engine (`qwen`, `qwen_custom_voice`, `luxtts`, `chatterbox`, `chatterbox_turbo`, `tada`, `kokoro`) |
 | `--only-slide N` | Process a single slide (1-based index). Only that slide is exported and rendered, producing one MP4 named `<deck>-slide-NN.mp4` (the full deck's video is never overwritten). The slide's files keep their real number (`slide_NN.png` / `slide_NN_notes.txt` / `slide_NN_voiceover.wav`), so a previous run's voiceover for that slide is reused correctly; pass `--gen-voiceover` to regenerate it |
 | `-o`, `--output` | Output MP4 path |
 | `--export-only` | Export PNGs and notes; skip MP4 assembly |
-| `--gen-voiceover` | Generate voiceover WAVs via Voicebox (default: reuse existing files) |
+| `--gen-voiceover` | Generate voiceover WAVs (via one-voice by default, or Voicebox with `--voicebox`) — default: reuse existing files |
 | `--personality` | Rewrite speaker notes in the profile's voice before TTS (default: off; also enabled by `VOICEBOX_PERSONALITY=1`) |
 | `--split-at N[,N...]` | Split into multiple MP4s at 1-indexed slide numbers |
 | `--fps` | Video frame rate (default: `24`) |
@@ -271,7 +356,7 @@ out/my_presentation/
 - Each voiceover WAV ends with a built-in 1-second tail of silence, so voiced slides flow into the next slide with a natural 1s gap (no separate inter-slide pause is added on top).
 - With `--split-at`, multiple MP4 files are created (e.g. `my_presentation_part1.mp4`, `part2.mp4`, …).
 - With `--export-only`, PNG and note files are produced but no MP4 is assembled.
-- By default, existing `slide_XX_voiceover.wav` files are reused for video assembly. Pass `--gen-voiceover` to regenerate them via Voicebox.
+- By default, existing `slide_XX_voiceover.wav` files are reused for video assembly. Pass `--gen-voiceover` to regenerate them (one-voice by default; Voicebox with `--voicebox`).
 
 ## Google Slides support (optional)
 
@@ -297,20 +382,24 @@ python deck_to_video.py "https://docs.google.com/presentation/d/1abcDEFghijklmno
 
 ```
 deck-to-video/
-├── deck_to_video.py    # CLI entry point
-├── google_slides.py    # Google Slides export (optional)
-├── pptx_source.py      # PPTX export (LibreOffice)
-├── voicebox_client.py  # Voicebox TTS client
-├── narration.py        # Speaker-note text normalization
-├── sfx.py              # Punchline sound-effect WAV mixing
-├── make_sfx_assets.py  # Generates assets/ba_dum_tss.wav
-├── assets/             # Bundled sound-effect samples
-├── video_assembly.py   # MoviePy video assembly
-├── images.py           # Slide image resizing
-├── split_ranges.py     # Multi-part video splitting
-├── paths.py            # Shared paths and defaults
+├── deck_to_video.py      # CLI entry point
+├── google_slides.py      # Google Slides export (optional)
+├── pptx_source.py        # PPTX export (LibreOffice)
+├── one_voice_adapter.py  # one-voice TTS adapter (default narration engine)
+├── voicebox_client.py    # Voicebox TTS client (fallback, --voicebox)
+├── narration.py          # Speaker-note text normalization + voice/tone splits
+├── sfx.py                # Punchline sound-effect WAV mixing
+├── bgm.py                # Background-music synthesis
+├── make_sfx_assets.py    # Generates assets/ sound-effect samples
+├── make_bgm_assets.py    # Generates assets/ambient_loop.mp3
+├── assets/               # Bundled sound-effect + bg-music samples
+├── voices/               # Project voice profiles (e.g. voices/simone/)
+├── video_assembly.py     # MoviePy video assembly
+├── images.py             # Slide image resizing
+├── split_ranges.py       # Multi-part video splitting
+├── paths.py              # Shared paths and defaults
 ├── requirements.txt
-└── out/                # Generated output (gitignored)
+└── out/                  # Generated output (gitignored)
 ```
 
 ## Troubleshooting
@@ -330,7 +419,7 @@ or call the venv interpreter directly:
 
 (The PyPI package is `python-dotenv`, which provides the `dotenv` module — it's already in `requirements.txt`. If the venv itself is missing packages, re-run `pip install -r requirements.txt`.)
 
-**`VOICEBOX_PROFILE_ID is not set`** — only required with `--gen-voiceover`. Add the profile UUID to `.env` or pass `--profile-id`.
+**`VOICEBOX_PROFILE_ID is not set`** — only required when running with `--voicebox` (or when one-voice maps via this legacy fallback). With the default one-voice engine, set `ONE_VOICE` in `.env` (or let it fall back to the first available voice profile); with Voicebox, add the profile UUID to `.env` or pass `--profile-id`.
 
 **PPTX rendering fails** — install LibreOffice and confirm `soffice` is on your `PATH`:
 
