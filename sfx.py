@@ -32,6 +32,7 @@ SFX_SAMPLES = {
     # User-supplied recordings only; no synthesized fallbacks exist for these.
     "sad_trombone": ("sad_trombone.wav",),
     "drum_roll": ("drum_roll.wav",),
+    "cha_ching": ("cha-ching.wav",),
 }
 
 

@@ -236,6 +236,8 @@ SFX_ALIASES = {
     "sadtrombone": "sad_trombone",
     "wahwahwah": "sad_trombone",
     "drumroll": "drum_roll",
+    "chaching": "cha_ching",
+    "cha_ching": "cha_ching",
 }
 
 # A background-music tag: ``[bgm: TRACK]`` with optional trailing spec fields
@@ -376,6 +378,45 @@ def split_notes_on_sfx(
         if source.strip():
             parts.append({"kind": "narration", "source": source})
         parts.append({"kind": "sfx", "name": name})
+        cursor = end
+    tail = notes_text[cursor:]
+    if tail.strip():
+        parts.append({"kind": "narration", "source": tail})
+    return parts
+
+
+def split_notes_on_tone(notes_text: str) -> List[dict]:
+    """Split speaker notes into narration segments at tone-change boundaries.
+
+    Each recognized ``[tone: TAG]`` or ``[voice: NAME | tone: TAG]`` tag acts
+    as a split point; everything before it becomes one narration segment with
+    the preceding tone, everything after becomes the next segment.
+
+    Returns an ordered list of dicts:
+        - ``{"kind": "narration", "source": <raw notes substring>}``
+
+    Notes without any tone tag yield a single narration part covering the
+    whole text (backward compatible). This lets the single-take path still
+    produce separate audio per tone — the same way SFX already does.
+    """
+    if not notes_text or not notes_text.strip():
+        return []
+
+    splits: List[Tuple[int, int]] = []
+    for match in _TAG.finditer(notes_text):
+        tone = match.group("tone") or match.group("tone_only")
+        if tone:
+            splits.append((match.start(), match.end()))
+
+    if not splits:
+        return [{"kind": "narration", "source": notes_text}]
+
+    parts: List[dict] = []
+    cursor = 0
+    for start, end in splits:
+        source = notes_text[cursor:start]
+        if source.strip():
+            parts.append({"kind": "narration", "source": source})
         cursor = end
     tail = notes_text[cursor:]
     if tail.strip():

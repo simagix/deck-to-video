@@ -91,6 +91,7 @@ try:
         parse_bgm_cues,
         prepare_narration,
         split_notes_on_sfx,
+        split_notes_on_tone,
     )
     from paths import (
         DEFAULT_BG_MUSIC_VOLUME,
@@ -254,6 +255,46 @@ def _generate_voiceover_take(
     return True
 
 
+def _generate_voiceover_take_with_voice(
+    source: str,
+    output_wav: str,
+    api_base: str,
+    voice_name: str,
+    personality: bool,
+    engine: Optional[str],
+    use_voicebox: bool = False,
+) -> bool:
+    """Synthesize one narration take with a specific voice.
+
+    Like _generate_voiceover_take() but accepts an explicit voice name
+    instead of using the default profile_id.
+    """
+    narration_text = prepare_narration(source, personality=personality)
+    if not narration_text.strip():
+        return False
+    text = _ensure_terminal_punctuation(narration_text)
+    instruct = _first_tone_instruct(source)
+
+    if use_voicebox:
+        generate_voicebox_audio(
+            text,
+            profile_id=voice_name,
+            output_wav=output_wav,
+            api_base=api_base,
+            personality=personality,
+            engine=engine,
+            instruct=instruct,
+        )
+    else:
+        generate_one_voice_audio(
+            text,
+            profile_id=voice_name,
+            output_wav=output_wav,
+            instruct=instruct,
+        )
+    return True
+
+
 def _generate_voiceover_for_slide(
     output_dir: str,
     slide_idx: int,
@@ -275,13 +316,48 @@ def _generate_voiceover_for_slide(
     parts = split_notes_on_sfx(notes_text, supported=set(SFX_SAMPLES))
 
     if not any(part["kind"] == "sfx" for part in parts):
-        # Single-take path (no sound-effect cues): one narration call.
-        # The take keeps the first tone found anywhere in the notes.
-        if not _generate_voiceover_take(
-            notes_text, wav_path, api_base, profile_id, personality, engine, use_voicebox
-        ):
-            print(f"   ⏭️  Slide {slide_idx}: no narration after prep")
-            return None
+        # Single-take path (no sound-effect cues): check for multiple voices/tones
+        blocks = _parse_blocks(notes_text)
+        if len(blocks) <= 1:
+            # Zero or one block — single take with the default voice
+            if not _generate_voiceover_take(
+                notes_text, wav_path, api_base, profile_id, personality, engine, use_voicebox
+            ):
+                print(f"   ⏭️  Slide {slide_idx}: no narration after prep")
+                return None
+        else:
+            # Multiple blocks — generate separate takes with per-block voice/tone
+            voice_name = profile_id  # default voice
+            print(f"   🎭 Slide {slide_idx}: {len(blocks)} narration blocks detected")
+            pieces: List[Tuple[str, str]] = []
+            with tempfile.TemporaryDirectory(prefix=f"slide_{slide_idx:02d}_voice_") as tmp_dir:
+                for i, block in enumerate(blocks, start=1):
+                    # Use block's voice if specified, otherwise stick with previous
+                    if block.get("voice"):
+                        voice_name = block["voice"]
+                    block_text = block["text"]
+                    if not block_text.strip():
+                        continue
+                    take_path = os.path.join(tmp_dir, f"block_{i:02d}.wav")
+                    print(f"      🎙️ Block {i}: voice={voice_name}, text={block_text[:50]!r}...")
+                    if _generate_voiceover_take_with_voice(
+                        block_text,
+                        take_path,
+                        api_base,
+                        voice_name,
+                        personality,
+                        engine,
+                        use_voicebox,
+                    ):
+                        pieces.append(("wav", take_path))
+                        print(f"      ✅ Block {i}: generated {take_path}")
+                    else:
+                        print(f"      ❌ Block {i}: generation failed")
+                if pieces:
+                    assemble_voiceover(pieces, wav_path)
+                    print(f"   🔗 Slide {slide_idx}: assembled {len(pieces)} clips")
+                else:
+                    print(f"   ❌ Slide {slide_idx}: no clips generated")
         # Append a short tail of silence so the final word is never truncated
         # and voiced slides flow into the next with a natural 1s gap.
         _append_silence_to_wav(
@@ -291,29 +367,37 @@ def _generate_voiceover_for_slide(
         return wav_path
 
     # Multi-take path: each recognized "[sfx: ...]" tag splits the notes into
-    # separate takes. The sample is spliced between them — landing exactly
-    # where the tag sat, even mid-slide — and each take keeps its own
-    # [voice:/tone:] context as its style instruct.
+    # separate takes. Within each narration part, voice/tone changes are
+    # also split into separate takes so multi-voice slides sound right.
     pieces: List[Tuple[str, str]] = []
     inserted: List[str] = []
     take_no = 0
+    voice_name = profile_id  # track current voice across blocks
     with tempfile.TemporaryDirectory(prefix=f"slide_{slide_idx:02d}_sfx_") as tmp_dir:
         for part in parts:
             if part["kind"] == "sfx":
                 pieces.append(("sfx", part["name"]))
                 continue
-            take_no += 1
-            take_path = os.path.join(tmp_dir, f"take_{take_no:02d}.wav")
-            if _generate_voiceover_take(
-                part["source"],
-                take_path,
-                api_base,
-                profile_id,
-                personality,
-                engine,
-                use_voicebox,
-            ):
-                pieces.append(("wav", take_path))
+            # Split this narration part by voice/tone changes
+            blocks = _parse_blocks(part["source"])
+            for block in blocks:
+                if block.get("voice"):
+                    voice_name = block["voice"]
+                block_text = block["text"]
+                if not block_text.strip():
+                    continue
+                take_no += 1
+                take_path = os.path.join(tmp_dir, f"take_{take_no:02d}.wav")
+                if _generate_voiceover_take_with_voice(
+                    block_text,
+                    take_path,
+                    api_base,
+                    voice_name,
+                    personality,
+                    engine,
+                    use_voicebox,
+                ):
+                    pieces.append(("wav", take_path))
         inserted = assemble_voiceover(pieces, wav_path)
     for name in inserted:
         print(f"   🥁 Slide {slide_idx}: {name} mid-slide")

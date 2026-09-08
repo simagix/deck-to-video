@@ -17,12 +17,13 @@ _parse_script = None
 _profile_reference = None
 _synthesize = None
 _resolve_default_voice = None
+_trim_tone_leak = None
 
 
 def _ensure_one_voice():
     """Import one-voice, raising a helpful error if not installed."""
     global _one_voice_imported, _parse_script, _profile_reference
-    global _synthesize, _resolve_default_voice
+    global _synthesize, _resolve_default_voice, _trim_tone_leak
     if _one_voice_imported:
         return
     try:
@@ -31,6 +32,7 @@ def _ensure_one_voice():
             _profile_reference as _profile_reference,
             _synthesize as _synthesize,
             resolve_default_voice as _resolve_default_voice,
+            trim_tone_leak as _trim_tone_leak,
         )
     except ImportError:
         raise RuntimeError(
@@ -94,7 +96,9 @@ def generate_one_voice_audio(
 
     # Build the text: prepend tone instruction if provided
     # one-voice uses in-band tone directions spoken by the model
-    if instruct:
+    has_instruct = instruct is not None
+    narration_text = text  # save original narration for trim target
+    if has_instruct:
         # The instruct is a full sentence like "Speak in a warm, friendly way."
         # Prepend it so the model reads it as a direction
         text = f"{instruct} {text}"
@@ -104,14 +108,33 @@ def generate_one_voice_audio(
 
     print(f"   🎙️  one-voice ({voice_name}): {len(text)} chars → {os.path.basename(output_wav)}")
 
-    # one-voice generates the WAV file directly
-    _synthesize(
-        text=text,
-        model="mlx-community/Qwen3-TTS-12Hz-1.7B-Base-8bit",
-        output=output_path,
-        ref_audio=ref_audio,
-        ref_text=None,
-    )
+    if has_instruct:
+        # Generate to a temp file, then trim the leaked tone prompt
+        import tempfile
+        with tempfile.NamedTemporaryFile(suffix=".wav", delete=False) as tmp:
+            raw_path = Path(tmp.name)
+        try:
+            _synthesize(
+                text=text,
+                model="mlx-community/Qwen3-TTS-12Hz-1.7B-Base-8bit",
+                output=raw_path,
+                ref_audio=ref_audio,
+                ref_text=None,
+            )
+            # Trim using the narration text (without instruct) as the target
+            _trim_tone_leak(raw_path, narration_text, output_path)
+        finally:
+            if raw_path.exists():
+                raw_path.unlink()
+    else:
+        # No tone instruct — generate directly
+        _synthesize(
+            text=text,
+            model="mlx-community/Qwen3-TTS-12Hz-1.7B-Base-8bit",
+            output=output_path,
+            ref_audio=ref_audio,
+            ref_text=None,
+        )
 
     if not output_path.exists():
         raise RuntimeError(f"one-voice failed to produce audio: {output_wav}")
