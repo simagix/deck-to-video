@@ -4,6 +4,8 @@ asset resolution / numpy mixing in bgm.py, and assembly-time layering glue."""
 from __future__ import annotations
 
 import os
+import shutil
+import subprocess
 import tempfile
 import unittest
 import wave
@@ -13,7 +15,6 @@ import numpy as np
 
 import bgm
 import narration
-from video_assembly import _clip_set_duration, _close_clip
 
 
 def _write_pcm_wav(path, rate=8000, seconds=0.5, channels=1):
@@ -183,7 +184,7 @@ class TileToSamplesTests(unittest.TestCase):
         self.assertEqual(bgm.tile_to_samples(np.ones((2, 2)), 0).shape, (0, 2))
 
 
-class BuildMusicClipTests(unittest.TestCase):
+class WriteMusicWavTests(unittest.TestCase):
     def setUp(self):
         tmp = tempfile.TemporaryDirectory()
         self.addCleanup(tmp.cleanup)
@@ -193,91 +194,123 @@ class BuildMusicClipTests(unittest.TestCase):
         self.expected = _write_pcm_wav(
             self.source_wav, rate=self.rate, seconds=self.src_seconds
         )
+        self.out_wav = os.path.join(tmp.name, "music.wav")
 
-    def _build(self, duration=1.0, volume=1.0):
-        clip = bgm.build_music_clip(
+    def _write(self, duration=1.0, volume=1.0):
+        return bgm.write_music_wav(
             self.source_wav,
             duration,
             sample_rate=self.rate,
             channels=1,
             volume=volume,
+            out_path=self.out_wav,
         )
-        self.addCleanup(_close_clip, clip)
-        return clip
+
+    def _samples(self):
+        with wave.open(self.out_wav, "rb") as wf:
+            self.assertEqual(wf.getframerate(), self.rate)
+            self.assertEqual(wf.getnchannels(), 1)
+            self.assertEqual(wf.getsampwidth(), 2)
+            payload = wf.readframes(wf.getnframes())
+        return np.frombuffer(payload, dtype="<i2").astype(np.float64) / 32768.0
 
     def test_gain_applied_at_every_sample(self):
-        frame = float(np.asarray(self._build(volume=0.5).get_frame(0.0)).ravel()[0])
-        self.assertAlmostEqual(frame, self.expected[0][0] * 0.5, places=12)
+        self._write(duration=0.5, volume=0.5)
+        got = self._samples()
+        self.assertEqual(len(got), int(0.5 * self.rate))
+        # Both sides are quantized to int16, but through different scales
+        # (32767 vs 32768); sub-LSB differences are expected.
+        np.testing.assert_allclose(got, self.expected[:, 0] * 0.5, atol=2e-5)
 
     def test_loop_wraps_around_source_end(self):
-        past_end = float(np.asarray(self._build(duration=1.2).get_frame(0.6)).ravel()[0])
-        wrapped_src = float(np.asarray(self._build(duration=1.2).get_frame(0.1)).ravel()[0])
-        self.assertAlmostEqual(past_end, wrapped_src, places=12)
+        # 1.2s output = 9600 samples; sample 4800 is 800 into the 2nd repeat.
+        self._write(duration=1.2)
+        got = self._samples()
+        self.assertEqual(len(got), int(1.2 * self.rate))
+        np.testing.assert_allclose(got[4800:4900], self.expected[800:900, 0], atol=1e-6)
 
     def test_duration_matches_timeline(self):
-        self.assertAlmostEqual(self._build(duration=1.05).duration, 1.05, places=9)
-
-    def test_vectorized_times_follow_loop_indexing(self):
-        # t=0.5625 lands one half-second into the second repeat == src sample
-        # 500 exactly (dyadic time keeps floor(t*rate) free of float noise).
-        stack = np.asarray(
-            self._build(duration=1.2, volume=0.25).frame_function(np.array([0.0, 0.5625]))
-        )
-        self.assertEqual(stack.shape, (2, 1))
-        np.testing.assert_allclose(
-            stack[:, 0],
-            self.expected[[0, 500]][..., 0] * 0.25,
-        )
+        self._write(duration=1.05)
+        self.assertEqual(len(self._samples()), int(1.05 * self.rate))
 
     def test_invalid_arguments_raise(self):
         with self.assertRaises(ValueError):
-            bgm.build_music_clip(self.source_wav, 0, sample_rate=self.rate, channels=1)
+            bgm.write_music_wav(
+                self.source_wav, 0, sample_rate=self.rate, channels=1,
+                out_path=self.out_wav,
+            )
         with self.assertRaises(ValueError):
-            bgm.build_music_clip(
-                self.source_wav, 1, sample_rate=self.rate, channels=1, volume=-0.1
+            bgm.write_music_wav(
+                self.source_wav, 1, sample_rate=self.rate, channels=1,
+                volume=-0.1, out_path=self.out_wav,
+            )
+        with self.assertRaises(ValueError):
+            bgm.write_music_wav(
+                self.source_wav, 1, sample_rate=0, channels=1,
+                out_path=self.out_wav,
             )
 
 
-class AttachBackgroundMusicTests(unittest.TestCase):
+class MixBackgroundMusicTests(unittest.TestCase):
+    """End-to-end: write_music_wav + video_assembly's amix pass on real MP4s."""
+
     def setUp(self):
         tmp = tempfile.TemporaryDirectory()
         self.addCleanup(tmp.cleanup)
+        self.tmp = tmp.name
         self.voice_wav = os.path.join(tmp.name, "slide_01_voiceover.wav")
-        _write_pcm_wav(self.voice_wav, rate=8000, seconds=0.5, channels=2)
+        _write_pcm_wav(self.voice_wav, rate=8000, seconds=0.5)
         self.music_ref = bgm.resolve_bgm_path("ambient_loop")
 
-    def test_voiced_deck_gets_composite_layer_under_narration(self):
-        from moviepy.audio.AudioClip import CompositeAudioClip
-
-        _, ImageClip, _, _, _ = __import__("video_assembly")._import_moviepy()
-        voice = __import__("video_assembly")._import_moviepy()[0](self.voice_wav)
-        self.addCleanup(_close_clip, voice)
-
-        container = ImageClip(np.zeros((16, 16), dtype=np.uint8))
-        container = _clip_set_duration(container, voice.duration)
-        container = bgm._clip_set_audio(container, voice)
-        self.addCleanup(_close_clip, container)
-
-        scored = bgm.attach_background_music(
-            container, self.music_ref, volume=0.2, wav_paths=[self.voice_wav]
+        ffmpeg = shutil.which("ffmpeg")
+        voiced = os.path.join(tmp.name, "voiced.mp4")
+        subprocess.run(
+            [ffmpeg, "-y", "-hide_banner", "-loglevel", "error",
+             "-f", "lavfi", "-i", "color=c=black:s=64x36:r=8:d=0.75",
+             "-i", self.voice_wav,
+             "-c:v", "libx264", "-pix_fmt", "yuv420p", "-c:a", "aac",
+             "-shortest", voiced],
+            check=True,
         )
-        self.addCleanup(_close_clip, scored)
-        self.assertIsInstance(scored.audio, CompositeAudioClip)
-        self.assertAlmostEqual(scored.duration, voice.duration, places=6)
+        silent = os.path.join(tmp.name, "silent.mp4")
+        subprocess.run(
+            [ffmpeg, "-y", "-hide_banner", "-loglevel", "error",
+             "-f", "lavfi", "-i", "color=c=black:s=64x36:r=8:d=0.75",
+             "-c:v", "libx264", "-pix_fmt", "yuv420p", silent],
+            check=True,
+        )
+        self.voiced, self.silent = voiced, silent
+
+    def _score(self, video):
+        from video_assembly import _mux_final
+
+        music_wav = os.path.join(self.tmp, "bgm.wav")
+        bgm.write_music_wav(
+            self.music_ref, 0.75, sample_rate=8000, channels=1,
+            volume=0.5, out_path=music_wav,
+        )
+        output = os.path.join(self.tmp, "scored.mp4")
+        if video == self.voiced:
+            # Narration WAV + looped music → layered amix.
+            _mux_final(video, self.voice_wav, music_wav, output, 0.75)
+        else:
+            # Fully silent deck: the music is the sole soundtrack.
+            _mux_final(video, None, music_wav, output, 0.75)
+        return output
+
+    def test_voiced_deck_gets_music_layered_under_narration(self):
+        output = self._score(self.voiced)
+        samples = bgm._ffmpeg_resampled_frames(output, 8000, 1)
+        self.assertGreater(len(samples), 0)
+        # Narration (0.4 amplitude tone) survives the layering.
+        self.assertGreater(float(np.abs(samples[:4000]).max()), 0.3)
 
     def test_silent_deck_gets_music_as_sole_soundtrack(self):
-        _, ImageClip, _, _, _ = __import__("video_assembly")._import_moviepy()
-
-        container = ImageClip(np.zeros((16, 16), dtype=np.uint8))
-        container = _clip_set_duration(container, 0.75)
-        self.addCleanup(_close_clip, container)
-
-        scored = bgm.attach_background_music(
-            container, self.music_ref, volume=0.2, wav_paths=[self.voice_wav]
-        )
-        self.addCleanup(_close_clip, scored)
-        self.assertIsNotNone(scored.audio)
-        self.assertAlmostEqual(scored.audio.duration, 0.75, places=6)
+        output = self._score(self.silent)
+        samples = bgm._ffmpeg_resampled_frames(output, 8000, 1)
+        self.assertGreater(len(samples), 0)
+        # Music (gained to 0.5 of the track) is the only sound.
+        self.assertGreater(float(np.abs(samples).max()), 0.01)
 
 
 if __name__ == "__main__":

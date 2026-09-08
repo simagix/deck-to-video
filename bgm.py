@@ -10,9 +10,9 @@ tag text never reaches the TTS. This module owns everything else:
 
 Unlike punchline SFX, background music is NOT baked into the per-slide WAVs:
 it must play continuously across slide boundaries, so it is layered under the
-assembled narration at video-assembly time (``bgm.attach_background_music``,
-invoked from ``video_assembly``), looping when the track is shorter than the
-timeline.
+assembled narration at video-assembly time (``bgm.write_music_wav`` prepares
+the looped/gained track, and ``video_assembly`` mixes it in with one ffmpeg
+``amix`` pass), looping when the track is shorter than the timeline.
 """
 
 from __future__ import annotations
@@ -74,24 +74,18 @@ def resolve_bgm_path(ref: str) -> str:
 
 
 # ============================================================================
-# Assembly-time mixing (MoviePy front-end, numpy mixing core)
+# Assembly-time mixing (numpy decode/loop core; ffmpeg mux in video_assembly)
 # ============================================================================
 # Philosophy mirrors sfx.py: every composite layer must share one sample
-# format, otherwise MoviePy's mixer misaligns layers. The voiceover WAVs fix
-# that format, so the track is decoded ONCE via FFmpeg straight into the
+# format, otherwise the mix misaligns layers. The voiceover WAVs fix that
+# format, so the track is decoded ONCE via FFmpeg straight into the
 # narration's rate/channel layout; looping, trimming and gain are then plain
-# numpy ops before wrapping the result in an AudioClip.
+# numpy ops. The final layering itself is a single ffmpeg `amix` pass in
+# video_assembly.assemble_presentation_video — MoviePy is no longer involved.
 
 #: Assumed voiceover format when probing is impossible (no cached WAVs, e.g.
 #: a fully silent deck scored only by background music).
 VOICE_FALLBACK_RATE = 44100
-
-
-def _clip_set_audio(clip, audio):
-    """MoviePy 1.x/2.x compatible with_audio/set_audio."""
-    if hasattr(clip, "with_audio"):
-        return clip.with_audio(audio)
-    return clip.set_audio(audio)
 
 
 def probe_voice_format(wav_paths) -> Tuple[int, int]:
@@ -181,8 +175,7 @@ def _ffmpeg_resampled_frames(path: str, sample_rate: int, channels: int) -> np.n
     """Decode any supported input straight to ``(n, channels)`` float32 PCM.
 
     One FFmpeg subprocess emits raw little-endian samples already conforming
-    to the requested layout — sidestepping MoviePy's chunked audio reader,
-    whose end-of-file handling varies across versions.
+    to the requested layout — one process, no chunked-reader edge cases.
     """
     import shutil as _shutil
     import subprocess as _subprocess
@@ -219,9 +212,8 @@ def decode_music_array(music_path: str, sample_rate: int, channels: int) -> np.n
     WAV goes through the stdlib ``wave`` module plus linear resampling, while
     every other container (MP3/M4A/OGG…) is converted by ONE FFmpeg process
     directly into the target rate/channel layout. Either way, looping,
-    trimming and gain downstream are plain array math, and MoviePy never
-    appears near the audio reader (whose boundary behavior differs between
-    releases).
+    trimming and gain downstream are plain array math, and the final mux is a
+    single ffmpeg pass in video_assembly.
 
     Memory note: peak footprint is roughly duration_seconds * sample_rate *
     channels * 8 bytes (a 3-minute stereo 44.1kHz track is ~76 MB) — fine for
@@ -239,19 +231,27 @@ def decode_music_array(music_path: str, sample_rate: int, channels: int) -> np.n
     return _ffmpeg_resampled_frames(music_path, sample_rate, channels)
 
 
-def build_music_clip(
+def write_music_wav(
     music_path: str,
     duration: float,
     *,
     sample_rate: int,
     channels: int,
     volume: float = DEFAULT_BG_MUSIC_VOLUME,
-):
-    """Precomputed, looped, gain-applied soundtrack wrapped as an AudioClip."""
+    out_path: str,
+) -> str:
+    """Decode, gain, loop and trim the track to exactly *duration* seconds.
+
+    The result is a 16-bit PCM WAV at the requested rate/channel layout —
+    the same format as the voiceover — ready for video_assembly to layer
+    under the narration with one ffmpeg ``amix`` pass.
+    """
     if duration <= 0:
         raise ValueError("duration must be positive")
     if volume < 0:
         raise ValueError("volume cannot be negative")
+    if sample_rate <= 0 or channels <= 0:
+        raise ValueError("sample_rate and channels must be positive")
 
     signal = decode_music_array(music_path, sample_rate, channels)
     if signal.size == 0:
@@ -260,63 +260,12 @@ def build_music_clip(
 
     total_samples = int(round(duration * sample_rate))
     looped = tile_to_samples(signal, total_samples)
+    pcm = np.clip(np.round(looped * 32767.0), -32768, 32767).astype("<i2")
 
-    from moviepy.audio.AudioClip import AudioClip
+    with wave.open(out_path, "wb") as wf:
+        wf.setnchannels(int(channels))
+        wf.setsampwidth(2)
+        wf.setframerate(int(sample_rate))
+        wf.writeframes(pcm.tobytes())
+    return out_path
 
-    def make_frame(t):
-        scalar = np.isscalar(t)
-        times = np.atleast_1d(np.asarray(t, dtype=np.float64))
-        idx = np.clip((times * sample_rate).astype(np.int64), 0, len(looped) - 1)
-        frame = looped[idx]
-        return frame[0] if scalar else frame
-
-    return AudioClip(
-        frame_function=make_frame,
-        duration=float(duration),
-        fps=int(sample_rate),
-    )
-
-
-def attach_background_music(
-    final_movie,
-    music_path: str,
-    *,
-    volume: float = DEFAULT_BG_MUSIC_VOLUME,
-    wav_paths=None,
-):
-    """Layer looped background music underneath *final_movie*'s soundtrack.
-
-    Probing order: existing voiceover WAVs fix the mix format; otherwise the
-    narration clip's own fps is honored; a bare deck (no WAVs at all) falls
-    back to VOICE_FALLBACK_RATE. Works both under voiced decks — where
-    CompositeAudioClip puts the music behind the concatenated narration+SFX
-    track — and silent-only decks with no narration audio at all.
-
-    The returned clip shares readers with *final_movie*: close ONLY the
-    returned clip afterwards.
-    """
-    from moviepy.audio.AudioClip import CompositeAudioClip
-
-    duration = getattr(final_movie, "duration", None)
-    if not duration:
-        raise ValueError("Cannot score a clip without a known duration")
-
-    sample_rate, channels = probe_voice_format(wav_paths)
-    narr_audio = final_movie.audio
-    narr_fps = getattr(narr_audio, "fps", None)
-    if narr_fps:
-        sample_rate = int(narr_fps)
-
-    music_clip = build_music_clip(
-        music_path,
-        duration,
-        sample_rate=sample_rate,
-        channels=channels,
-        volume=volume,
-    )
-
-    if narr_audio is None:
-        return _clip_set_audio(final_movie, music_clip)
-
-    combined = CompositeAudioClip([music_clip, narr_audio])
-    return _clip_set_audio(final_movie, combined)

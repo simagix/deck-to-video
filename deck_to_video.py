@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """
 Export a deck (Google Slides or local PPTX) to PNG + speaker notes, generate
-voiceover via local Voicebox, and assemble MP4 video(s) with MoviePy.
+voiceover via local Voicebox, and assemble MP4 video(s) with FFmpeg.
 
 Requires Voicebox running locally only when using --gen-voiceover
 (default API: http://127.0.0.1:17493).
@@ -878,7 +878,7 @@ if __name__ == "__main__":
     parser.add_argument(
         "--export-only",
         action="store_true",
-        help="Export PNGs and notes only; skip MoviePy video assembly",
+        help="Export PNGs and notes only; skip FFmpeg video assembly",
     )
     parser.add_argument(
         "--gen-voiceover",

@@ -21,8 +21,10 @@ python-dotenv>=1.0.0
 # Slide image processing
 Pillow>=9.0.0
 
-# Video assembly (bundles FFmpeg via imageio-ffmpeg)
-moviepy>=1.0.3
+# Video assembly
+numpy>=1.24.0
+# Optional: bundled FFmpeg binary used only when ffmpeg is not on PATH
+imageio-ffmpeg>=0.4.8
 
 # OneVoice TTS (local Qwen3-TTS on Apple Silicon — optional)
 # Apple Silicon only: requires mlx-audio which needs Metal GPU

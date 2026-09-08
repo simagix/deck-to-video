@@ -4,12 +4,12 @@ Turn a presentation deck into a narrated MP4 video. Export slides and speaker
 notes from a local **PPTX** file, generate voiceover audio with a local TTS
 engine — **[one-voice](https://github.com/simagix/one-voice)** (Qwen3-TTS on
 Apple Silicon, the default) or **[Voicebox](https://github.com/jamiepine/voicebox)**
-— and assemble everything into video with MoviePy.
+— and assemble everything into video with FFmpeg.
 
 > Google Slides IDs/URLs are also accepted, but PPTX is the recommended and fully documented workflow — see [Google Slides support (optional)](#google-slides-support-optional).
 
 <!-- ADD VISUALIZATION HERE -->
-![A flowchart showing the Deck-to-Video pipeline: input presentation (Google Slides or PPTX), output of extracted images and notes, voiceover processing via the local one-voice TTS engine (or the Voicebox fallback, optionally with a cloned signature voice), and video assembly by MoviePy, leading to the final 1080p MP4.](workflow_diagram.png)
+![A flowchart showing the Deck-to-Video pipeline: input presentation (Google Slides or PPTX), output of extracted images and notes, voiceover processing via the local one-voice TTS engine (or the Voicebox fallback, optionally with a cloned signature voice), and video assembly by FFmpeg, leading to the final 1080p MP4.](workflow_diagram.png)
 
 ## Features
 
@@ -33,8 +33,11 @@ Apple Silicon, the default) or **[Voicebox](https://github.com/jamiepine/voicebo
 | [one-voice](https://github.com/simagix/one-voice) package | one-voice narration (included in `requirements.txt`; Apple-Silicon sibling repo with `voices/`) |
 | [Voicebox](https://github.com/jamiepine/voicebox) desktop app | Only when using `--voicebox` |
 | [LibreOffice](https://www.libreoffice.org/) (`soffice` on `PATH`) | PPTX input (required) |
+| [FFmpeg](https://ffmpeg.org/) (`ffmpeg` on `PATH`) | Always (video assembly + audio mixing) |
 
-MoviePy bundles FFmpeg via `imageio-ffmpeg`, so you do not need to install FFmpeg separately.
+FFmpeg must be on your `PATH` (`brew install ffmpeg`). If it is missing, the
+optional `imageio-ffmpeg` pip package (see `requirements.txt`) provides a
+bundled fallback binary.
 
 Narration defaults to the **one-voice** engine (Qwen3-TTS on Apple Silicon). On
 other platforms, or if you prefer voice cloning inside the Voicebox app, pass
@@ -394,7 +397,7 @@ deck-to-video/
 ├── make_bgm_assets.py    # Generates assets/ambient_loop.mp3
 ├── assets/               # Bundled sound-effect + bg-music samples
 ├── voices/               # Project voice profiles (e.g. voices/simone/)
-├── video_assembly.py     # MoviePy video assembly
+├── video_assembly.py     # FFmpeg video assembly (zoompan Ken Burns + concat)
 ├── images.py             # Slide image resizing
 ├── split_ranges.py       # Multi-part video splitting
 ├── paths.py              # Shared paths and defaults

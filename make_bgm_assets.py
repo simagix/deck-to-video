@@ -79,7 +79,7 @@ def _synthesize_loop():
 
 
 def _ffmpeg_exe() -> str:
-    """Prefer a system FFmpeg; fall back to the one bundled with MoviePy."""
+    """Prefer a system FFmpeg; fall back to the imageio-ffmpeg bundled one."""
     found = shutil.which("ffmpeg")
     if found:
         return found
