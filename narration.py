@@ -238,6 +238,7 @@ SFX_ALIASES = {
     "drumroll": "drum_roll",
     "chaching": "cha_ching",
     "cha_ching": "cha_ching",
+    "doorslam": "door_slam",
 }
 
 # A background-music tag: ``[bgm: TRACK]`` with optional trailing spec fields

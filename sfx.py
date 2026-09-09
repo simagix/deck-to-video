@@ -33,6 +33,7 @@ SFX_SAMPLES = {
     "sad_trombone": ("sad_trombone.wav",),
     "drum_roll": ("drum_roll.wav",),
     "cha_ching": ("cha-ching.wav",),
+    "door_slam": ("door_slam.wav",),
 }
 
 

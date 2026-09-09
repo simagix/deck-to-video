@@ -75,6 +75,22 @@ class ParseSfxCuesTests(unittest.TestCase):
             with self.subTest(alias=alias):
                 self.assertEqual(narration.parse_sfx_cues(f"Ready?{alias}"), ["drum_roll"])
 
+    def test_recognizes_door_slam(self):
+        for alias in (
+            "[sfx: door_slam]",
+            "[SFX: door_slam]",
+            "[sfx: door slam]",
+            "[sfx: door-slam]",
+            "[sfx: doorslam]",
+        ):
+            with self.subTest(alias=alias):
+                self.assertEqual(narration.parse_sfx_cues(f"Close up.{alias}"), ["door_slam"])
+
+    def test_door_slam_splits_in_notes(self):
+        parts = narration.split_notes_on_sfx("That's the door.\n[sfx: door_slam]")
+        self.assertEqual([p["kind"] for p in parts], ["narration", "sfx"])
+        self.assertEqual(parts[-1], {"kind": "sfx", "name": "door_slam"})
+
     def test_ignores_unknown_sfx_names(self):
         self.assertEqual(narration.parse_sfx_cues("[sfx: applause]"), [])
 
