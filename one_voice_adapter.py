@@ -138,6 +138,7 @@ def generate_one_voice_audio(
     personality: bool = False,
     engine: Optional[str] = None,
     instruct: Optional[str] = None,
+    language: str = "en",
 ) -> str:
     """Generate narration audio via one-voice and save a .wav file.
 
@@ -148,6 +149,8 @@ def generate_one_voice_audio(
     - ``personality`` is ignored (one-voice has no LLM rewrite).
     - ``engine`` is ignored (one-voice only uses Qwen3-TTS).
     - ``instruct`` is prepended to the text as a tone direction.
+    - ``language`` is ``"en"``/``"zh"`` and maps to mlx-audio
+      ``lang_code="english"``/``"chinese"`` for the Qwen3-TTS voice clone.
     """
     if not text or not text.strip():
         raise ValueError("Cannot generate audio from empty text")
@@ -157,6 +160,13 @@ def generate_one_voice_audio(
     # Resolve voice name and reference audio
     voice_name = profile_id or _resolve_default_voice()
     ref_audio = _profile_reference(voice_name)
+
+    # Explicit per-slide language beats mlx-audio's "auto" for Mandarin:
+    # verified that lang_code="chinese" pronounces 宫保鸡丁 correctly while
+    # "auto"/"english" both render 公保鸡丁.
+    from narration import mlx_language
+
+    lang_code = mlx_language(language)
 
     # Build the text: prepend tone instruction if provided
     # one-voice uses in-band tone directions spoken by the model
@@ -170,7 +180,7 @@ def generate_one_voice_audio(
     output_path = Path(output_wav)
     output_path.parent.mkdir(parents=True, exist_ok=True)
 
-    print(f"   🎙️  one-voice ({voice_name}): {len(text)} chars → {os.path.basename(output_wav)}")
+    print(f"   🎙️  one-voice ({voice_name} [{lang_code}]): {len(text)} chars → {os.path.basename(output_wav)}")
 
     if has_instruct:
         # Generate to a temp file, then trim the leaked tone prompt
@@ -184,6 +194,7 @@ def generate_one_voice_audio(
                 output=raw_path,
                 ref_audio=ref_audio,
                 ref_text=None,
+                lang_code=lang_code,
             )
             # Trim using the narration text (without instruct) as the target
             _trim_tone_leak(raw_path, narration_text, output_path)
@@ -198,6 +209,7 @@ def generate_one_voice_audio(
             output=output_path,
             ref_audio=ref_audio,
             ref_text=None,
+            lang_code=lang_code,
         )
 
     if not output_path.exists():

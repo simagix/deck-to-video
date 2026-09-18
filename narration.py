@@ -13,6 +13,94 @@ def _strip_control_chars(text: str) -> str:
     return "".join(c for c in text if c == "\n" or c == "\r" or c == "\t" or ord(c) >= 32)
 
 
+# ---------------------------------------------------------------------------
+# Language detection (stdlib only — per-slide auto-detect for EN/ZH)
+# ---------------------------------------------------------------------------
+
+# CJK ranges: CJK Unified Ideographs (+ extensions), compatibility ideographs,
+# CJK symbols/punctuation, and fullwidth ASCII variants.
+_CJK_RE = re.compile(
+    "[\u3400-\u4dbf\u4e00-\u9fff\uf900-\ufaff"
+    "\U00020000-\U0002a6df\U0002a600-\U0002b73f\U0002b740-\U0002b81f"
+    "\u3000-\u303f\uff00-\uffef]"
+)
+_LATIN_RE = re.compile(r"[A-Za-z]")
+
+#: CJK punctuation that must survive _normalize_unicode_punctuation().
+#: Without these, Mandarin narration loses its sentence boundaries
+#: (。，、；：？！) and Qwen3-TTS prosody degrades.
+_CJK_PUNCT_KEEP = frozenset("，。、；：？！「」『』（）【】《》〈〉…—·・")
+
+
+def cjk_ratio(text: str) -> float:
+    """Fraction of CJK vs (CJK + Latin) characters in *text* (0.0–1.0).
+
+    Returns 0.0 for empty / script-neutral text (digits, pure punctuation).
+    """
+    if not text:
+        return 0.0
+    cjk = len(_CJK_RE.findall(text))
+    latin = len(_LATIN_RE.findall(text))
+    if cjk + latin == 0:
+        return 0.0
+    return cjk / (cjk + latin)
+
+
+def detect_language(text: str) -> str:
+    """Detect narration language: ``"zh"`` or ``"en"``.
+
+    A slide counts as Mandarin when CJK characters are a significant share
+    (>20%) of its script-bearing characters — so a mostly-English slide that
+    merely mentions ``宫保鸡丁`` stays English, while a bilingual slide with
+    real Mandarin content switches to ``"zh"`` (verified: Qwen3-TTS renders
+    English words inside ``lang_code="chinese"`` cleanly, but mangles
+    Mandarin rendered as ``"english"``).
+    """
+    if not text or not text.strip():
+        return "en"
+    return "zh" if cjk_ratio(text) > 0.2 else "en"
+
+
+def resolve_narration_language(text: str, override: Optional[str] = None) -> str:
+    """Resolve the effective per-slide language (``"zh"`` / ``"en"``).
+
+    ``override`` is a deck-level ``--language`` value: ``"en"`` / ``"zh"``
+    force every slide; ``None`` / ``"auto"`` auto-detect per slide.
+    """
+    if override is not None and override.strip().lower() in ("en", "zh"):
+        return override.strip().lower()
+    return detect_language(text)
+
+
+#: Deck-to-Voicebox language codes (Voicebox /generate ``language`` field).
+VOICEBOX_LANGUAGE_CODES = ("en", "zh")
+
+#: Deck-to-mlx-audio language codes (mlx-audio ``lang_code`` for Qwen3-TTS).
+MLX_LANGUAGE_CODES = ("auto", "chinese", "english")
+
+
+def voicebox_language(lang: str) -> str:
+    """Map a narration language (``"zh"``/``"en"``) to a Voicebox code."""
+    return "zh" if lang.strip().lower() in ("zh", "chinese") else "en"
+
+
+def mlx_language(lang: str) -> str:
+    """Map a narration language (``"zh"``/``"en"``) to an mlx-audio code."""
+    return "chinese" if lang.strip().lower() in ("zh", "chinese") else "english"
+
+
+def parse_language_override(value: Optional[str]) -> str:
+    """Normalize a ``--language`` / env value to ``"auto"``/``"en"``/``"zh"``."""
+    if value is None:
+        return "auto"
+    normalized = value.strip().lower()
+    if normalized in ("zh", "chinese", "cn", "mandarin"):
+        return "zh"
+    if normalized in ("en", "english"):
+        return "en"
+    return "auto"
+
+
 def _normalize_unicode_punctuation(text: str) -> str:
     if not text:
         return text
@@ -40,6 +128,10 @@ def _normalize_unicode_punctuation(text: str) -> str:
     result: List[str] = []
     for char in text:
         if ord(char) < 128:
+            result.append(char)
+        elif char in _CJK_PUNCT_KEEP:
+            # CJK punctuation carries sentence boundaries for Mandarin TTS —
+            # never strip it (the old code mapped it to a space).
             result.append(char)
         elif char in "\u2000\u2001\u2002\u2003\u2004\u2005\u2006\u2007\u2008\u2009\u200a\u200b\u200c\u200d\u200e\u200f":
             result.append(" ")

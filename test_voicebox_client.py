@@ -215,6 +215,46 @@ class GenerateVoiceboxPayloadTests(unittest.TestCase):
                 engine="not-a-real-engine",
             )
 
+    def test_language_defaults_to_en(self):
+        """Without a language the payload keeps the legacy English default."""
+        recorder = self._run_generate(personality=False, text=RAW_NOTES)
+        payload = recorder.generate_payload()
+        self.assertEqual(payload["language"], "en")
+
+    def test_language_zh_forwarded(self):
+        """Mandarin slides must send language=zh (not the hardcoded en)."""
+        recorder = _GenerateRequestRecorder()
+        with tempfile.NamedTemporaryFile(suffix=".wav", delete=False) as tmp:
+            out_wav = tmp.name
+        try:
+            with (
+                mock.patch.object(voicebox_client.requests, "get", side_effect=recorder.get),
+                mock.patch.object(voicebox_client.requests, "post", side_effect=recorder.post),
+            ):
+                voicebox_client.generate_voicebox_audio(
+                    text="宫保鸡丁是一道经典的川菜。",
+                    profile_id=PROFILE_ID,
+                    output_wav=out_wav,
+                    api_base=API_BASE,
+                    language="zh",
+                )
+        finally:
+            if os.path.exists(out_wav):
+                os.remove(out_wav)
+        payload = recorder.generate_payload()
+        self.assertEqual(payload["language"], "zh")
+
+    def test_unsupported_language_raises(self):
+        """An unknown language should fail fast with a clear message."""
+        with self.assertRaises(ValueError):
+            voicebox_client.generate_voicebox_audio(
+                text=RAW_NOTES,
+                profile_id=PROFILE_ID,
+                output_wav="/tmp/unused.wav",
+                api_base=API_BASE,
+                language="xx",
+            )
+
 
 if __name__ == "__main__":
     unittest.main(verbosity=2)

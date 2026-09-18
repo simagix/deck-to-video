@@ -30,6 +30,22 @@ SUPPORTED_ENGINES: tuple[str, ...] = (
 )
 _SUPPORTED_ENGINE_SET = frozenset(SUPPORTED_ENGINES)
 
+# Languages Voicebox /generate accepts (see its OpenAPI GenerationRequest
+# schema: "pattern": "^(zh|en|ja|ko|de|fr|ru|pt|es|it|...)$").
+SUPPORTED_LANGUAGES: tuple[str, ...] = (
+    "zh",
+    "en",
+    "ja",
+    "ko",
+    "de",
+    "fr",
+    "ru",
+    "pt",
+    "es",
+    "it",
+)
+_SUPPORTED_LANGUAGE_SET = frozenset(SUPPORTED_LANGUAGES)
+
 
 def _env_bool(name: str, default: bool) -> bool:
     value = os.environ.get(name)
@@ -253,6 +269,7 @@ def generate_voicebox_audio(
     personality: bool = False,
     engine: Optional[str] = None,
     instruct: Optional[str] = None,
+    language: str = "en",
 ) -> str:
     """POST narration text to Voicebox /generate and save a .wav file.
 
@@ -263,15 +280,26 @@ def generate_voicebox_audio(
     (e.g. "Frustrated and exasperated, with noticeable impatience.") that
     steers the TTS toward a particular tone. Only effective with engines
     that support style instructions (e.g. Qwen CustomVoice / instruct mode).
+
+    ``language`` is the Voicebox language code (``"en"`` / ``"zh"`` / ...).
+    Per-slide auto-detect resolves it in deck_to_video; callers may force a
+    value via ``--language``.
     """
     if not text or not text.strip():
         raise ValueError("Cannot generate audio from empty text")
+
+    language = (language or "en").strip().lower() or "en"
+    if language not in _SUPPORTED_LANGUAGE_SET:
+        raise ValueError(
+            f"Unknown Voicebox language {language!r}. Supported languages: "
+            f"{', '.join(SUPPORTED_LANGUAGES)}."
+        )
 
     url = f"{api_base.rstrip('/')}/generate"
     payload: dict[str, Any] = {
         "text": text,
         "profile_id": profile_id,
-        "language": "en",
+        "language": language,
     }
 
     if engine:

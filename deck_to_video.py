@@ -213,10 +213,26 @@ def _missing_voiceover_slide_numbers(
 
 
 def _ensure_terminal_punctuation(text: str) -> str:
-    """End narration with a sentence terminator so Voicebox closes its prosody."""
-    if text[-1] not in (".", "!", "?"):
-        return text.rstrip() + "."
-    return text
+    """End narration with a sentence terminator so TTS closes its prosody.
+
+    English narration gets ``.``; Mandarin narration gets ``。``. Mixed
+    text keeps whichever terminator is already there.
+    """
+    from narration import detect_language
+
+    if not text:
+        return text
+    if text[-1] in (".", "!", "?", "。", "！", "？"):
+        return text
+    terminator = "。" if detect_language(text) == "zh" else "."
+    return text.rstrip() + terminator
+
+
+def _resolve_take_language(source: str, language_override: str) -> str:
+    """Resolve per-take ``\"en\"``/``\"zh"`` from the deck-level override."""
+    from narration import resolve_narration_language
+
+    return resolve_narration_language(source, override=language_override)
 
 
 def _generate_voiceover_take(
@@ -227,13 +243,23 @@ def _generate_voiceover_take(
     personality: bool,
     engine: Optional[str],
     use_voicebox: bool = False,
+    language_override: str = "auto",
 ) -> bool:
-    """Synthesize one narration take. Uses Voicebox or one-voice based on use_voicebox."""
+    """Synthesize one narration take. Uses Voicebox or one-voice based on use_voicebox.
+
+    ``language_override`` is the deck-level ``--language`` value
+    (``"auto"``/``"en"``/``"zh"``); ``"auto"`` auto-detects per take.
+    """
+    from narration import voicebox_language
+
     narration_text = prepare_narration(source, personality=personality)
     if not narration_text.strip():
         return False
     text = _ensure_terminal_punctuation(narration_text)
     instruct = _first_tone_instruct(source)
+    language = _resolve_take_language(text, language_override)
+    voicebox_lang = voicebox_language(language)
+    print(f"      🌐 language: {language} (voicebox={voicebox_lang})")
 
     if use_voicebox:
         generate_voicebox_audio(
@@ -244,6 +270,7 @@ def _generate_voiceover_take(
             personality=personality,
             engine=engine,
             instruct=instruct,
+            language=voicebox_lang,
         )
     else:
         generate_one_voice_audio(
@@ -251,6 +278,7 @@ def _generate_voiceover_take(
             profile_id=profile_id,
             output_wav=output_wav,
             instruct=instruct,
+            language=language,
         )
     return True
 
@@ -263,17 +291,23 @@ def _generate_voiceover_take_with_voice(
     personality: bool,
     engine: Optional[str],
     use_voicebox: bool = False,
+    language_override: str = "auto",
 ) -> bool:
     """Synthesize one narration take with a specific voice.
 
     Like _generate_voiceover_take() but accepts an explicit voice name
     instead of using the default profile_id.
     """
+    from narration import voicebox_language
+
     narration_text = prepare_narration(source, personality=personality)
     if not narration_text.strip():
         return False
     text = _ensure_terminal_punctuation(narration_text)
     instruct = _first_tone_instruct(source)
+    language = _resolve_take_language(text, language_override)
+    voicebox_lang = voicebox_language(language)
+    print(f"      🌐 language: {language} (voicebox={voicebox_lang})")
 
     if use_voicebox:
         generate_voicebox_audio(
@@ -284,6 +318,7 @@ def _generate_voiceover_take_with_voice(
             personality=personality,
             engine=engine,
             instruct=instruct,
+            language=voicebox_lang,
         )
     else:
         generate_one_voice_audio(
@@ -291,6 +326,7 @@ def _generate_voiceover_take_with_voice(
             profile_id=voice_name,
             output_wav=output_wav,
             instruct=instruct,
+            language=language,
         )
     return True
 
@@ -304,6 +340,7 @@ def _generate_voiceover_for_slide(
     personality: bool,
     engine: Optional[str] = None,
     use_voicebox: bool = False,
+    language_override: str = "auto",
 ) -> Optional[str]:
     if not prepare_narration(notes_text, personality=personality):
         print(
@@ -319,9 +356,15 @@ def _generate_voiceover_for_slide(
         # Single-take path (no sound-effect cues): check for multiple voices/tones
         blocks = _parse_blocks(notes_text)
         if len(blocks) <= 1:
-            # Zero or one block — single take with the default voice
-            if not _generate_voiceover_take(
-                notes_text, wav_path, api_base, profile_id, personality, engine, use_voicebox
+            # Zero or one block — single take. Honor an explicit [voice: ...]
+            # tag even when it is the only block; otherwise a single-tag
+            # slide (e.g. "[voice: yuki] ...") would silently fall back to
+            # the default profile voice.
+            block_voice = blocks[0].get("voice") if blocks else None
+            voice_to_use = block_voice or profile_id
+            if not _generate_voiceover_take_with_voice(
+                notes_text, wav_path, api_base, voice_to_use, personality, engine, use_voicebox,
+                language_override,
             ):
                 print(f"   ⏭️  Slide {slide_idx}: no narration after prep")
                 return None
@@ -348,6 +391,7 @@ def _generate_voiceover_for_slide(
                         personality,
                         engine,
                         use_voicebox,
+                        language_override,
                     ):
                         pieces.append(("wav", take_path))
                         print(f"      ✅ Block {i}: generated {take_path}")
@@ -396,6 +440,7 @@ def _generate_voiceover_for_slide(
                     personality,
                     engine,
                     use_voicebox,
+                    language_override,
                 ):
                     pieces.append(("wav", take_path))
         inserted = assemble_voiceover(pieces, wav_path)
@@ -417,6 +462,7 @@ def _voiceover_paths_for_slides(
     engine: Optional[str] = None,
     slide_numbers: Optional[List[int]] = None,
     use_voicebox: bool = False,
+    language_override: str = "auto",
 ) -> List[Optional[str]]:
     if gen_voiceover:
         if not profile_id:
@@ -464,6 +510,7 @@ def _voiceover_paths_for_slides(
                     personality,
                     engine=engine,
                     use_voicebox=use_voicebox,
+                    language_override=language_override,
                 )
             )
             continue
@@ -484,6 +531,7 @@ def _voiceover_paths_for_slides(
                     personality,
                     engine=engine,
                     use_voicebox=use_voicebox,
+                    language_override=language_override,
                 )
             )
             continue
@@ -650,7 +698,15 @@ def main(
     no_bg_music: bool = False,
     transition: str = DEFAULT_TRANSITION_STYLE,
     transition_seconds: float = DEFAULT_TRANSITION_SECONDS,
+    language: Optional[str] = None,
 ) -> int:
+    from narration import parse_language_override
+
+    language_override = parse_language_override(
+        language or os.environ.get("DECK_LANGUAGE") or os.environ.get("ONE_VOICE_LANG")
+    )
+    if language_override != "auto":
+        print(f"🌐 Deck language override: {language_override} (all slides)")
     try:
         use_personality = (
             personality_enabled_from_env()
@@ -779,6 +835,7 @@ def main(
             engine=voicebox_engine,
             slide_numbers=slide_numbers,
             use_voicebox=use_voicebox,
+            language_override=language_override,
         )
         while len(wav_paths) < len(png_paths):
             wav_paths.append(None)
@@ -861,6 +918,16 @@ if __name__ == "__main__":
         help=(
             "Use Voicebox API for narration instead of one-voice local TTS "
             "(default: one-voice)"
+        ),
+    )
+    parser.add_argument(
+        "--language",
+        choices=["auto", "en", "zh"],
+        default=None,
+        help=(
+            "Narration language: 'auto' auto-detects Mandarin per slide from "
+            "CJK content (default), 'zh' forces Mandarin on every slide, 'en' "
+            "forces English. Also settable via DECK_LANGUAGE / ONE_VOICE_LANG."
         ),
     )
     parser.add_argument(
@@ -999,5 +1066,6 @@ if __name__ == "__main__":
             no_bg_music=args.no_bg_music,
             transition=args.transition,
             transition_seconds=args.transition_duration,
+            language=args.language,
         )
     )

@@ -18,7 +18,13 @@ import sys
 
 import dotenv  # type: ignore[import-untyped]
 
-from narration import _parse_blocks, _tone_instruct, prepare_narration
+from narration import (
+    _parse_blocks,
+    _tone_instruct,
+    detect_language,
+    prepare_narration,
+    voicebox_language,
+)
 from paths import ENV_PATH
 
 _SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
@@ -73,7 +79,7 @@ def main() -> int:
     payload: dict[str, object] = {
         "text": prepared,
         "profile_id": profile_id,
-        "language": "en",
+        "language": voicebox_language(detect_language(prepared)),
     }
     if engine:
         payload["engine"] = engine
@@ -88,6 +94,7 @@ def main() -> int:
     print(f"api_base    : {api_base}")
     print(f"profile_id  : {profile_id or '<NOT SET — no VOICEBOX_PROFILE_ID in .env>'}")
     print(f"engine      : {engine or '<UNSET — Voicebox uses the profile Default Engine>'}")
+    print(f"language    : {payload['language']} (auto-detected from narration text)")
     print(f"raw notes   : {len(raw)} chars")
     print(f"after narration prep: {prepared!r}")
     print()

@@ -174,5 +174,71 @@ class VoiceToneTagParsingTests(unittest.TestCase):
             self.assertTrue(instruction.strip())
 
 
+ZH_PURE = "宫保鸡丁是一道经典的川菜，麻辣鲜香，下饭又开胃。"
+ZH_MIXED = "Kung Pao Chicken 宫保鸡丁是四川名菜，spicy and numbing."
+EN_MENTION = "Today we cook Kung Pao Chicken 宫保鸡丁 for dinner."
+EN_PURE = "Hello, welcome to this presentation on Sichuan cooking."
+
+
+class LanguageDetectionTests(unittest.TestCase):
+    def test_pure_mandarin_detects_zh(self):
+        self.assertEqual(narration.detect_language(ZH_PURE), "zh")
+
+    def test_mixed_content_detects_zh(self):
+        self.assertEqual(narration.detect_language(ZH_MIXED), "zh")
+
+    def test_english_with_cjk_mention_stays_en(self):
+        # A mostly-English slide that merely mentions 宫保鸡丁 stays English.
+        self.assertEqual(narration.detect_language(EN_MENTION), "en")
+
+    def test_pure_english_detects_en(self):
+        self.assertEqual(narration.detect_language(EN_PURE), "en")
+
+    def test_empty_and_neutral_detect_en(self):
+        self.assertEqual(narration.detect_language(""), "en")
+        self.assertEqual(narration.detect_language("   "), "en")
+        self.assertEqual(narration.detect_language("123 ... !!!"), "en")
+
+    def test_override_forces_deck_language(self):
+        self.assertEqual(
+            narration.resolve_narration_language(ZH_PURE, override="en"), "en"
+        )
+        self.assertEqual(
+            narration.resolve_narration_language(EN_PURE, override="zh"), "zh"
+        )
+        self.assertEqual(
+            narration.resolve_narration_language(ZH_PURE, override="auto"), "zh"
+        )
+        self.assertEqual(
+            narration.resolve_narration_language(EN_PURE, override=None), "en"
+        )
+
+    def test_code_mapping(self):
+        self.assertEqual(narration.voicebox_language("zh"), "zh")
+        self.assertEqual(narration.voicebox_language("en"), "en")
+        self.assertEqual(narration.mlx_language("zh"), "chinese")
+        self.assertEqual(narration.mlx_language("en"), "english")
+
+    def test_parse_language_override(self):
+        self.assertEqual(narration.parse_language_override(None), "auto")
+        self.assertEqual(narration.parse_language_override("auto"), "auto")
+        self.assertEqual(narration.parse_language_override("zh"), "zh")
+        self.assertEqual(narration.parse_language_override("chinese"), "zh")
+        self.assertEqual(narration.parse_language_override("EN"), "en")
+        self.assertEqual(narration.parse_language_override("bogus"), "auto")
+
+
+class CjkPunctuationTests(unittest.TestCase):
+    def test_cjk_punctuation_survives_normalization(self):
+        out = narration._normalize_unicode_punctuation(ZH_PURE)
+        for punct in ("，", "。"):
+            self.assertIn(punct, out)
+
+    def test_prepare_narration_keeps_mandarin_boundaries(self):
+        out = narration.prepare_narration(ZH_PURE, personality=False)
+        self.assertIn("，", out)
+        self.assertTrue(out.endswith("。"))
+
+
 if __name__ == "__main__":
     unittest.main(verbosity=2)
