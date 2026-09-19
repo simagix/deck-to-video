@@ -11,6 +11,7 @@ from typing import Any, List, Optional
 
 import requests  # type: ignore[import-untyped]
 
+from narration import SUPPORTED_LANGUAGE_CODES
 from paths import DEFAULT_VOICEBOX_URL
 
 _PERSONALITY_FALLBACK_WARNED = False
@@ -31,19 +32,10 @@ SUPPORTED_ENGINES: tuple[str, ...] = (
 _SUPPORTED_ENGINE_SET = frozenset(SUPPORTED_ENGINES)
 
 # Languages Voicebox /generate accepts (see its OpenAPI GenerationRequest
-# schema: "pattern": "^(zh|en|ja|ko|de|fr|ru|pt|es|it|...)$").
-SUPPORTED_LANGUAGES: tuple[str, ...] = (
-    "zh",
-    "en",
-    "ja",
-    "ko",
-    "de",
-    "fr",
-    "ru",
-    "pt",
-    "es",
-    "it",
-)
+# schema: "pattern": "^(zh|en|ja|ko|de|fr|ru|pt|es|it|...)$"). Sourced from
+# narration.py so the deck's --language choices and this HTTP client can never
+# drift apart — both are exactly the languages Qwen3-TTS speaks.
+SUPPORTED_LANGUAGES: tuple[str, ...] = SUPPORTED_LANGUAGE_CODES
 _SUPPORTED_LANGUAGE_SET = frozenset(SUPPORTED_LANGUAGES)
 
 

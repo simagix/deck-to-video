@@ -14,7 +14,7 @@ def _strip_control_chars(text: str) -> str:
 
 
 # ---------------------------------------------------------------------------
-# Language detection (stdlib only — per-slide auto-detect for EN/ZH)
+# Language detection (stdlib only — per-slide auto-detect across all 10 codes)
 # ---------------------------------------------------------------------------
 
 # CJK ranges: CJK Unified Ideographs (+ extensions), compatibility ideographs,
@@ -26,10 +26,124 @@ _CJK_RE = re.compile(
 )
 _LATIN_RE = re.compile(r"[A-Za-z]")
 
+# Scripts that pin down a single deck language on their own: kana (hiragana /
+# katakana + halfwidth forms) is used only by Japanese, Hangul only by Korean,
+# and Cyrillic — among our language set — only by Russian.
+_KANA_RE = re.compile("[\u3040-\u309f\u30a0-\u30ff\uff66-\uff9f]")
+_HANGUL_RE = re.compile("[\u1100-\u11ff\u3130-\u318f\uac00-\ud7af]")
+_CYRILLIC_RE = re.compile("[\u0400-\u04ff]")
+
+#: ``(language code, script regex)`` pairs tried in order by detect_language().
+_SCRIPT_LANGUAGE_RES = (
+    ("ja", _KANA_RE),
+    ("ko", _HANGUL_RE),
+    ("ru", _CYRILLIC_RE),
+)
+
+# Any Unicode letter (no digits/underscore) — the denominator for script ratios,
+# so "30% kana" means 30% of the slide's letters. _WORD_RE is the tokenizer used
+# for the Latin-language markers below.
+_LETTER_RE = re.compile(r"[^\W\d_]", re.UNICODE)
+_WORD_RE = re.compile(r"[^\W\d_]+", re.UNICODE)
+
+# Function-word markers per Latin-script language (lowercased, matched whole).
+# Tokens that are also ordinary English words are deliberately omitted, so an
+# English slide cannot be mistaken for Italian ("come", "per"), Spanish/Portuguese
+# ("no", "do", "um"), or French ("on", "en").
+_LATIN_MARKERS = {
+    "de": frozenset((
+        "der", "die", "das", "und", "ist", "sind", "nicht", "mit", "für",
+        "auf", "ein", "eine", "einen", "einem", "einer", "dem", "den", "dass",
+        "auch", "werden", "wird", "wie", "bei", "aus", "oder", "aber", "sehr",
+        "noch", "nur", "kann", "können", "müssen", "wir", "ich", "sich",
+        "durch", "gegen", "ohne", "über", "zwischen", "nach", "vor", "vom",
+        "zum", "zur", "diese", "dieser", "dieses", "viele", "mehr", "immer",
+        "jetzt", "heute", "ganz", "schon", "sollen", "wollen", "möchte",
+        "etwas", "nichts", "warum", "welche", "welcher",
+    )),
+    "fr": frozenset((
+        "le", "la", "les", "des", "une", "et", "est", "sont", "dans", "pour",
+        "avec", "que", "qui", "ne", "pas", "plus", "aux", "vous", "nous",
+        "ils", "elles", "être", "avoir", "cette", "ces", "leur", "leurs",
+        "mais", "donc", "aussi", "très", "bien", "tout", "tous", "toutes",
+        "par", "au", "du", "ce", "se", "sa", "son", "ses", "votre", "notre",
+        "était", "sera", "peut", "doit", "fait", "faire", "même", "encore",
+        "toujours", "jamais", "beaucoup", "quoi", "dont",
+    )),
+    "es": frozenset((
+        "el", "los", "las", "una", "unas", "unos", "es", "son", "está",
+        "están", "para", "con", "que", "más", "por", "del", "al", "su", "sus",
+        "pero", "muy", "también", "cuando", "donde", "porque", "este", "esta",
+        "estos", "estas", "hay", "ser", "tener", "hacer", "usted", "ustedes",
+        "nosotros", "nuestra", "nuestro", "cada", "todo", "todos", "siempre",
+        "nunca", "ahora", "después", "antes", "sólo",
+    )),
+    "it": frozenset((
+        "il", "lo", "gli", "dei", "delle", "degli", "della", "uno", "che",
+        "non", "sono", "per", "nella", "nel", "del", "più", "anche", "questo",
+        "questa", "questi", "queste", "molto", "perché", "quando", "dove",
+        "essere", "avere", "fare", "siamo", "siete", "loro", "noi", "voi",
+        "già", "ancora", "sempre", "tutti", "tutte", "tutto", "quale", "dopo",
+        "prima", "adesso", "senza", "sulla", "sul",
+    )),
+    "pt": frozenset((
+        "uma", "são", "está", "estão", "para", "com", "que", "não", "mais",
+        "por", "da", "dos", "das", "na", "nos", "nas", "como", "mas", "muito",
+        "também", "quando", "onde", "porque", "este", "esta", "isso", "ele",
+        "ela", "eles", "elas", "você", "vocês", "nós", "ser", "ter", "fazer",
+        "foi", "era", "sempre", "nunca", "agora", "depois", "antes", "sobre",
+        "entre", "cada", "todos", "todas",
+    )),
+    "en": frozenset((
+        "the", "and", "is", "are", "was", "were", "of", "to", "in", "for",
+        "with", "that", "this", "these", "those", "you", "your", "we", "our",
+        "they", "their", "it", "its", "be", "have", "has", "will", "can",
+        "not", "but", "from", "as", "at", "by", "on", "or", "if", "there",
+    )),
+}
+
+#: A Latin-script language must claim at least this share of a slide's words,
+#: and beat English, before auto-detect trusts it. Conservative on purpose:
+#: a wrong lang_code mangles pronunciation, while "en" is the safe fallback.
+_LATIN_MARKER_MIN_RATIO = 0.06
+
 #: CJK punctuation that must survive _normalize_unicode_punctuation().
 #: Without these, Mandarin narration loses its sentence boundaries
 #: (。，、；：？！) and Qwen3-TTS prosody degrades.
 _CJK_PUNCT_KEEP = frozenset("，。、；：？！「」『』（）【】《》〈〉…—·・")
+
+
+def _script_ratio(text: str, pattern: "re.Pattern[str]") -> float:
+    """Fraction of *text*'s letters written in *pattern*'s script (0.0–1.0)."""
+    if not text:
+        return 0.0
+    letters = len(_LETTER_RE.findall(text))
+    if letters == 0:
+        return 0.0
+    return len(pattern.findall(text)) / letters
+
+
+def _detect_latin_language(text: str) -> str:
+    """Guess a Latin-script language from function-word markers.
+
+    Returns the best-matching non-English code only when it clears
+    :data:`_LATIN_MARKER_MIN_RATIO` *and* beats English; otherwise ``"en"``.
+    """
+    words = _WORD_RE.findall(text.lower())
+    if not words:
+        return "en"
+    total = len(words)
+    ratios = {
+        code: sum(1 for word in words if word in markers) / total
+        for code, markers in _LATIN_MARKERS.items()
+    }
+    best = max(
+        (code for code in _LATIN_MARKERS if code != "en"),
+        key=lambda code: ratios[code],
+    )
+    if ratios[best] >= _LATIN_MARKER_MIN_RATIO and ratios[best] > ratios["en"]:
+        return best
+    return "en"
 
 
 def cjk_ratio(text: str) -> float:
@@ -47,58 +161,140 @@ def cjk_ratio(text: str) -> float:
 
 
 def detect_language(text: str) -> str:
-    """Detect narration language: ``"zh"`` or ``"en"``.
+    """Detect the narration language of *text*.
 
-    A slide counts as Mandarin when CJK characters are a significant share
-    (>20%) of its script-bearing characters — so a mostly-English slide that
-    merely mentions ``宫保鸡丁`` stays English, while a bilingual slide with
-    real Mandarin content switches to ``"zh"`` (verified: Qwen3-TTS renders
-    English words inside ``lang_code="chinese"`` cleanly, but mangles
-    Mandarin rendered as ``"english"``).
+    Returns a code from :data:`SUPPORTED_LANGUAGE_CODES`, falling back to
+    ``"en"``. Detection is deliberately conservative — a wrong guess is worse
+    than English, because Qwen3-TTS mangles text spoken with the wrong
+    ``lang_code`` (verified for Mandarin: ``lang_code="english"`` renders
+    宫保鸡丁 as 公保鸡丁).
+
+    Evidence, in order:
+
+    1. Scripts that identify one language on their own, when >20% of the
+       slide's letters: kana → ``"ja"``, Hangul → ``"ko"``, Cyrillic → ``"ru"``.
+    2. Han characters >20% of script-bearing characters (the historic
+       :func:`cjk_ratio` rule) → ``"zh"``. A Japanese slide written purely in
+       kanji also lands here, but real Japanese notes carry kana and hit
+       step 1 first.
+    3. ``¿`` / ``¡`` → ``"es"`` (inverted punctuation is decisive).
+    4. Latin function-word markers (``der/die/das``, ``le/les/est``, …) →
+       ``"de"``/``"fr"``/``"es"``/``"it"``/``"pt"`` when they clear the
+       threshold and beat English.
+    5. Otherwise → ``"en"``.
     """
     if not text or not text.strip():
         return "en"
-    return "zh" if cjk_ratio(text) > 0.2 else "en"
+    for code, pattern in _SCRIPT_LANGUAGE_RES:
+        if _script_ratio(text, pattern) > 0.2:
+            return code
+    if cjk_ratio(text) > 0.2:
+        return "zh"
+    if "\u00bf" in text or "\u00a1" in text:
+        # ¿ / ¡ — Spanish (and only Spanish) inverts its punctuation.
+        return "es"
+    return _detect_latin_language(text)
+
+
+#: Canonical deck-to-video language codes. These are exactly the languages
+#: Qwen3-TTS speaks (its ``codec_language_id`` map) and the same set the
+#: Voicebox /generate ``language`` field accepts — so one-voice (the default)
+#: and ``--voicebox`` agree on every code below.
+SUPPORTED_LANGUAGE_CODES = ("en", "zh", "ja", "ko", "de", "fr", "ru", "pt", "es", "it")
+
+#: Qwen3-TTS / mlx-audio ``lang_code`` names, keyed by canonical code.
+MLX_LANGUAGE_NAMES = {
+    "en": "english",
+    "zh": "chinese",
+    "ja": "japanese",
+    "ko": "korean",
+    "de": "german",
+    "fr": "french",
+    "ru": "russian",
+    "pt": "portuguese",
+    "es": "spanish",
+    "it": "italian",
+}
+
+#: Kept for backwards compatibility — both used to describe an EN/ZH-only world.
+VOICEBOX_LANGUAGE_CODES = SUPPORTED_LANGUAGE_CODES
+MLX_LANGUAGE_CODES = ("auto",) + tuple(
+    MLX_LANGUAGE_NAMES[code] for code in SUPPORTED_LANGUAGE_CODES
+)
+
+_SUPPORTED_LANGUAGE_SET = frozenset(SUPPORTED_LANGUAGE_CODES)
+
+#: Accepted spelling → canonical code: language names, ISO 639-1/2 codes, and
+#: the colloquial ``cn``/``jp``/``kr`` shorthands.
+_LANGUAGE_ALIASES = {
+    "en": "en", "english": "en", "eng": "en",
+    "zh": "zh", "chinese": "zh", "cn": "zh", "mandarin": "zh",
+    "cmn": "zh", "zho": "zh",
+    "ja": "ja", "japanese": "ja", "jp": "ja", "jpn": "ja",
+    "ko": "ko", "korean": "ko", "kr": "ko", "kor": "ko",
+    "de": "de", "german": "de", "deu": "de", "ger": "de",
+    "fr": "fr", "french": "fr", "fra": "fr", "fre": "fr",
+    "ru": "ru", "russian": "ru", "rus": "ru",
+    "pt": "pt", "portuguese": "pt", "por": "pt",
+    "es": "es", "spanish": "es", "spa": "es", "castilian": "es",
+    "it": "it", "italian": "it", "ita": "it",
+}
+
+
+def canonical_language(value: Optional[str]) -> Optional[str]:
+    """Normalize a language name/code/region tag to a canonical code.
+
+    Accepts codes (``"zh"``), names (``"Chinese"``), region tags (``"pt-BR"``,
+    ``"en-US"``, ``"zh-Hans"``), and ``"auto"``. Returns ``None`` for empty or
+    unrecognized input, letting callers decide whether that means auto-detect
+    (env vars) or a hard error (CLI).
+    """
+    if value is None:
+        return None
+    normalized = value.strip().lower().replace("_", "-")
+    if not normalized:
+        return None
+    if normalized in ("auto", "detect"):
+        return "auto"
+    # Region/script subtags add no information we need: pt-BR → pt.
+    base = normalized.split("-", 1)[0]
+    for candidate in (normalized, base):
+        if candidate in _LANGUAGE_ALIASES:
+            return _LANGUAGE_ALIASES[candidate]
+    return None
 
 
 def resolve_narration_language(text: str, override: Optional[str] = None) -> str:
-    """Resolve the effective per-slide language (``"zh"`` / ``"en"``).
+    """Resolve the effective per-slide language code.
 
-    ``override`` is a deck-level ``--language`` value: ``"en"`` / ``"zh"``
-    force every slide; ``None`` / ``"auto"`` auto-detect per slide.
+    ``override`` is a deck-level ``--language`` value — any canonical code
+    (or a name like ``"chinese"``) forces every slide; ``None`` / ``"auto"``
+    auto-detects per slide via :func:`detect_language`.
     """
-    if override is not None and override.strip().lower() in ("en", "zh"):
-        return override.strip().lower()
+    forced = canonical_language(override)
+    if forced is not None and forced != "auto":
+        return forced
     return detect_language(text)
 
 
-#: Deck-to-Voicebox language codes (Voicebox /generate ``language`` field).
-VOICEBOX_LANGUAGE_CODES = ("en", "zh")
-
-#: Deck-to-mlx-audio language codes (mlx-audio ``lang_code`` for Qwen3-TTS).
-MLX_LANGUAGE_CODES = ("auto", "chinese", "english")
-
-
 def voicebox_language(lang: str) -> str:
-    """Map a narration language (``"zh"``/``"en"``) to a Voicebox code."""
-    return "zh" if lang.strip().lower() in ("zh", "chinese") else "en"
+    """Map a narration language to a Voicebox /generate ``language`` code."""
+    canonical = canonical_language(lang)
+    return canonical if canonical in _SUPPORTED_LANGUAGE_SET else "en"
 
 
 def mlx_language(lang: str) -> str:
-    """Map a narration language (``"zh"``/``"en"``) to an mlx-audio code."""
-    return "chinese" if lang.strip().lower() in ("zh", "chinese") else "english"
+    """Map a narration language to an mlx-audio ``lang_code`` name for Qwen3-TTS."""
+    return MLX_LANGUAGE_NAMES.get(canonical_language(lang) or "", "english")
 
 
 def parse_language_override(value: Optional[str]) -> str:
-    """Normalize a ``--language`` / env value to ``"auto"``/``"en"``/``"zh"``."""
-    if value is None:
-        return "auto"
-    normalized = value.strip().lower()
-    if normalized in ("zh", "chinese", "cn", "mandarin"):
-        return "zh"
-    if normalized in ("en", "english"):
-        return "en"
-    return "auto"
+    """Normalize a ``--language`` / env value to a canonical code or ``"auto"``.
+
+    Unknown values fall back to ``"auto"`` (per-slide detection) rather than
+    failing, so a stale ``DECK_LANGUAGE`` in ``.env`` can never break a build.
+    """
+    return canonical_language(value) or "auto"
 
 
 def _normalize_unicode_punctuation(text: str) -> str:

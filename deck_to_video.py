@@ -34,6 +34,9 @@ USAGE:
     python deck_to_video.py <id> -o my_deck.mp4
     python deck_to_video.py <id> --export-only
     python deck_to_video.py <id> --ken-burns     # add Ken Burns zoom/pan
+    python deck_to_video.py deck.pptx --gen-voiceover --language zh
+                                                 # force en/zh/ja/ko/de/fr/ru/pt/es/it
+                                                 # (default: auto-detect per slide)
 
 OUTPUT:
 =======
@@ -88,6 +91,8 @@ try:
         _first_tone_instruct,
         _parse_blocks,
         _tone_instruct,
+        SUPPORTED_LANGUAGE_CODES,
+        canonical_language,
         parse_bgm_cues,
         prepare_narration,
         split_notes_on_sfx,
@@ -212,11 +217,13 @@ def _missing_voiceover_slide_numbers(
     return missing
 
 
-def _ensure_terminal_punctuation(text: str) -> str:
+def _ensure_terminal_punctuation(text: str, language: Optional[str] = None) -> str:
     """End narration with a sentence terminator so TTS closes its prosody.
 
-    English narration gets ``.``; Mandarin narration gets ``。``. Mixed
-    text keeps whichever terminator is already there.
+    CJK languages (Mandarin, Japanese) get the ideographic full stop ``。``;
+    every other language gets ``.``. Text already ending in a terminator is
+    left alone. *language* is the resolved deck-level code; when omitted it is
+    auto-detected from *text*.
     """
     from narration import detect_language
 
@@ -224,15 +231,32 @@ def _ensure_terminal_punctuation(text: str) -> str:
         return text
     if text[-1] in (".", "!", "?", "。", "！", "？"):
         return text
-    terminator = "。" if detect_language(text) == "zh" else "."
+    code = language or detect_language(text)
+    terminator = "。" if code in ("zh", "ja") else "."
     return text.rstrip() + terminator
 
 
 def _resolve_take_language(source: str, language_override: str) -> str:
-    """Resolve per-take ``\"en\"``/``\"zh"`` from the deck-level override."""
+    """Resolve the per-take language code from the deck-level override."""
     from narration import resolve_narration_language
 
     return resolve_narration_language(source, override=language_override)
+
+
+def _cli_language(value: str) -> str:
+    """argparse ``type`` for ``--language`` — accepts codes or language names.
+
+    Rejects unknown values outright (unlike the env-var path, which degrades
+    to ``"auto"``), so a typo on the command line fails fast.
+    """
+    canonical = canonical_language(value)
+    if canonical is None:
+        raise argparse.ArgumentTypeError(
+            f"unknown language {value!r}. Use 'auto', a code "
+            f"({', '.join(SUPPORTED_LANGUAGE_CODES)}), or a language name "
+            "such as 'chinese' or 'pt-BR'."
+        )
+    return canonical
 
 
 def _generate_voiceover_take(
@@ -247,17 +271,17 @@ def _generate_voiceover_take(
 ) -> bool:
     """Synthesize one narration take. Uses Voicebox or one-voice based on use_voicebox.
 
-    ``language_override`` is the deck-level ``--language`` value
-    (``"auto"``/``"en"``/``"zh"``); ``"auto"`` auto-detects per take.
+    ``language_override`` is the deck-level ``--language`` value (any
+    canonical code, or ``"auto"``); ``"auto"`` auto-detects per take.
     """
     from narration import voicebox_language
 
     narration_text = prepare_narration(source, personality=personality)
     if not narration_text.strip():
         return False
-    text = _ensure_terminal_punctuation(narration_text)
     instruct = _first_tone_instruct(source)
-    language = _resolve_take_language(text, language_override)
+    language = _resolve_take_language(narration_text, language_override)
+    text = _ensure_terminal_punctuation(narration_text, language=language)
     voicebox_lang = voicebox_language(language)
     print(f"      🌐 language: {language} (voicebox={voicebox_lang})")
 
@@ -303,9 +327,9 @@ def _generate_voiceover_take_with_voice(
     narration_text = prepare_narration(source, personality=personality)
     if not narration_text.strip():
         return False
-    text = _ensure_terminal_punctuation(narration_text)
     instruct = _first_tone_instruct(source)
-    language = _resolve_take_language(text, language_override)
+    language = _resolve_take_language(narration_text, language_override)
+    text = _ensure_terminal_punctuation(narration_text, language=language)
     voicebox_lang = voicebox_language(language)
     print(f"      🌐 language: {language} (voicebox={voicebox_lang})")
 
@@ -500,6 +524,13 @@ def _voiceover_paths_for_slides(
             print("\n🎙️  Using existing voiceover files (pass --gen-voiceover to regenerate)...")
     else:
         print("\n🎙️  Using existing voiceover files (pass --gen-voiceover to regenerate)...")
+
+    if not gen_voiceover and language_override != "auto":
+        print(
+            f"   ⚠️  --language {language_override} only affects audio generated "
+            "now; existing WAVs are reused as-is (pass --gen-voiceover to "
+            "re-record them in this language)."
+        )
 
     wav_paths: List[Optional[str]] = []
     for idx, notes_text in enumerate(notes_per_slide, start=1):
@@ -930,12 +961,15 @@ if __name__ == "__main__":
     )
     parser.add_argument(
         "--language",
-        choices=["auto", "en", "zh"],
+        type=_cli_language,
         default=None,
+        metavar="LANG",
         help=(
-            "Narration language: 'auto' auto-detects Mandarin per slide from "
-            "CJK content (default), 'zh' forces Mandarin on every slide, 'en' "
-            "forces English. Also settable via DECK_LANGUAGE / ONE_VOICE_LANG."
+            "Narration language: 'auto' (default) detects each slide from its "
+            "notes; any other value forces every slide. Accepts a code or a "
+            "name — one of "
+            f"{', '.join(SUPPORTED_LANGUAGE_CODES)} (e.g. 'zh', 'chinese', "
+            "'pt-BR'). Also settable via DECK_LANGUAGE / ONE_VOICE_LANG."
         ),
     )
     parser.add_argument(

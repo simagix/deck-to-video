@@ -15,6 +15,7 @@ Apple Silicon, the default) or **[Voicebox](https://github.com/jamiepine/voicebo
 
 - **PPTX** — render slides locally with LibreOffice and read embedded speaker notes
 - **Voiceover** — synthesize narration from speaker notes with local one-voice (Qwen3-TTS, Apple Silicon) or Voicebox (`--voicebox`)
+- **Narration languages** — 10 languages via `--language`: English, Chinese, Japanese, Korean, German, French, Russian, Portuguese, Spanish, and Italian; `auto` (default) detects each slide's language from its own script, so one deck can mix languages
 - **Voice & tone tags** — direct a single slide (or even a paragraph mid-slide) to a cloned voice / style with `[voice: NAME | tone: TAG]`; the tone direction is spoken by one-voice and auto-leak-trimmed, or sent as a rich `instruct` to Voicebox
 - **Punchline sound effects** — tag jokes with `[sfx: rimshot]` (*Ba Dum Tss*) or `[sfx: sad_trombone]` (*wah-wah-waaah*) right after the punchline
 - **Background music** — drop one `[bgm: ambient_loop]` tag anywhere in your speaker notes to soundtrack the entire video under the narration
@@ -156,6 +157,49 @@ signature voice.
 > **Tip (Voicebox only):** combine a clone with the `--personality` flag — the
 > speaker notes are rewritten in the profile's voice first, then spoken by the
 > clone, which reinforces the signature character even more.
+
+### Narration language (`--language`)
+
+Both narration engines speak the same **10 languages** — the set Qwen3-TTS
+supports, and the set the Voicebox `/generate` API accepts:
+
+| Code | Language | Code | Language |
+|------|----------|------|----------|
+| `en` | English | `ru` | Russian |
+| `zh` | Chinese (Mandarin) | `pt` | Portuguese |
+| `ja` | Japanese | `es` | Spanish |
+| `ko` | Korean | `it` | Italian |
+| `de` | German | `fr` | French |
+
+`--language` accepts a code or a language name (case-insensitive; region tags
+like `pt-BR` / `zh-Hans` work too):
+
+```bash
+python deck_to_video.py deck.pptx --gen-voiceover --language zh
+python deck_to_video.py deck.pptx --gen-voiceover --language japanese
+python deck_to_video.py deck.pptx --gen-voiceover --language pt-BR
+```
+
+The default, `--language auto`, detects each slide's language from its own
+speaker notes, so a single deck may mix languages:
+
+- kana → Japanese, Hangul → Korean, Cyrillic → Russian
+- Han characters → Chinese (a mostly-English slide that merely mentions
+  `宫保鸡丁` stays English)
+- `¿`/`¡` → Spanish; Latin function-word markers (`der/die/das`,
+  `le/les/est`, …) → German/French/Spanish/Italian/Portuguese
+- anything ambiguous → English (a wrong language code mangles pronunciation,
+  so detection is deliberately conservative)
+
+Also settable via `DECK_LANGUAGE` / `ONE_VOICE_LANG` in `.env`; an
+unrecognized value there falls back to `auto` rather than failing a build.
+
+Voice cloning is cross-lingual, but a voice profile cloned from, say, an
+English reference will carry an accent when speaking German — try a short
+`--only-slide` sample before committing to a full deck. And note that
+`--language` only affects audio *generated* now: existing
+`slide_XX_voiceover.wav` files are reused as-is, so pass `--gen-voiceover` to
+re-record an existing deck in another language.
 
 ### Voice & tone tags (optional)
 
@@ -299,6 +343,17 @@ python deck_to_video.py my_deck.pptx -o presentation.mp4
 python deck_to_video.py --version   # deck_to_video v0.3.2
 ```
 
+### Narration languages
+
+```bash
+# Force every slide into one language (see the Configuration section for all 10)
+python deck_to_video.py my_deck.pptx --gen-voiceover --language zh
+python deck_to_video.py my_deck.pptx --gen-voiceover --language japanese
+
+# Or let each slide pick its own language from its notes (the default)
+python deck_to_video.py my_deck.pptx --gen-voiceover --language auto
+```
+
 ### Common options
 
 ```bash
@@ -340,6 +395,7 @@ python deck_to_video.py my_deck.pptx --transition none   # hard cuts, no transit
 | `-o`, `--output` | Output MP4 path |
 | `--export-only` | Export PNGs and notes; skip MP4 assembly |
 | `--gen-voiceover` | Generate voiceover WAVs (via one-voice by default, or Voicebox with `--voicebox`) — default: reuse existing files |
+| `--language LANG` | Narration language: `auto` (default; detects per slide), a code (`en` `zh` `ja` `ko` `de` `fr` `ru` `pt` `es` `it`), or a name (`chinese`, `pt-BR`, …). Also settable via `DECK_LANGUAGE` / `ONE_VOICE_LANG` |
 | `--personality` | Rewrite speaker notes in the profile's voice before TTS (default: off; also enabled by `VOICEBOX_PERSONALITY=1`) |
 | `--split-at N[,N...]` | Split into multiple MP4s at 1-indexed slide numbers |
 | `--fps` | Video frame rate (default: `24`) |
@@ -367,7 +423,7 @@ out/my_presentation/
 - Each voiceover WAV ends with a built-in 1-second tail of silence, so voiced slides flow into the next slide with a natural 1s gap (no separate inter-slide pause is added on top).
 - With `--split-at`, multiple MP4 files are created (e.g. `my_presentation_part1.mp4`, `part2.mp4`, …).
 - With `--export-only`, PNG and note files are produced but no MP4 is assembled.
-- By default, existing `slide_XX_voiceover.wav` files are reused for video assembly. Pass `--gen-voiceover` to regenerate them (one-voice by default; Voicebox with `--voicebox`).
+- By default, existing `slide_XX_voiceover.wav` files are reused for video assembly. Pass `--gen-voiceover` to regenerate them (one-voice by default; Voicebox with `--voicebox`). Note that reuse is language-blind: WAVs are keyed on slide number only, so re-running with a different `--language` keeps the old narration until you pass `--gen-voiceover`.
 
 ## Google Slides support (optional)
 
@@ -398,7 +454,8 @@ deck-to-video/
 ├── pptx_source.py        # PPTX export (LibreOffice)
 ├── one_voice_adapter.py  # one-voice TTS adapter (default narration engine)
 ├── voicebox_client.py    # Voicebox TTS client (fallback, --voicebox)
-├── narration.py          # Speaker-note text normalization + voice/tone splits
+├── narration.py          # Speaker-note normalization, per-slide language detection,
+│                         #   and voice/tone/sfx splits
 ├── sfx.py                # Punchline sound-effect WAV mixing
 ├── bgm.py                # Background-music synthesis
 ├── make_sfx_assets.py    # Generates assets/ sound-effect samples
@@ -444,6 +501,12 @@ On **Windows**, `soffice.exe` is not always added to `PATH` during a default Lib
 PPTX slide images are rendered by converting the deck to PDF with LibreOffice, then rasterizing each PDF page with `pypdfium2` (installed via `pip install -r requirements.txt`). If you see a slide-count mismatch error, the PDF export may have failed partially — try opening the PPTX in LibreOffice Impress manually.
 
 **No slide PNGs exported** — check that the PPTX file path is correct, the deck isn't password-protected, and the LibreOffice PDF conversion succeeded (see above).
+
+**Narration is in the wrong language, or pronunciation is mangled** — `--language auto` (the default) guesses each slide's language from its speaker notes and deliberately falls back to English whenever the evidence is weak, so short or proper-noun-heavy notes can guess wrong. Force it with `--language <code>` (e.g. `--language ja`), and check the per-slide `🌐 language:` lines in the output to see what was resolved.
+
+Note that `--language` only affects audio generated in the current run: existing `slide_XX_voiceover.wav` files are reused as-is (the tool prints a warning when you pass `--language` without `--gen-voiceover`). Re-record with `--gen-voiceover`, or delete the stale WAVs in `out/<deck>/` first.
+
+**A foreign-language voiceover sounds accented** — voice cloning is cross-lingual, but a profile cloned from a reference recording in one language carries that accent into others. Try a second profile cloned from a native reference for that language, and preview with `--only-slide N --gen-voiceover --language <code>` before re-recording the whole deck.
 
 ## License
 

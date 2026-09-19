@@ -178,6 +178,32 @@ ZH_PURE = "宫保鸡丁是一道经典的川菜，麻辣鲜香，下饭又开胃
 ZH_MIXED = "Kung Pao Chicken 宫保鸡丁是四川名菜，spicy and numbing."
 EN_MENTION = "Today we cook Kung Pao Chicken 宫保鸡丁 for dinner."
 EN_PURE = "Hello, welcome to this presentation on Sichuan cooking."
+JA_PURE = "このプレゼンテーションは、四川料理の紹介から始まります。とても辛いです。"
+KO_PURE = "이 프레젠테이션은 사천 요리 소개로 시작합니다. 매우 맵습니다."
+RU_PURE = (
+    "Эта презентация начинается с краткого введения. "
+    "Мы показываем, как готовится это блюдо."
+)
+DE_PURE = (
+    "Der Vortrag beginnt mit einer kurzen Einführung. Wir zeigen, wie das "
+    "Gericht zubereitet wird, und warum die Gewürze so wichtig sind."
+)
+FR_PURE = (
+    "Cette présentation commence par une courte introduction. Nous montrons "
+    "comment le plat est préparé et pourquoi les épices sont si importantes."
+)
+ES_PURE = (
+    "Esta presentación comienza con una breve introducción. Mostramos cómo "
+    "se prepara el plato y por qué las especias son tan importantes."
+)
+IT_PURE = (
+    "Questa presentazione inizia con una breve introduzione. Mostriamo come "
+    "si prepara il piatto e perché le spezie sono così importanti."
+)
+PT_PURE = (
+    "Esta apresentação começa com uma breve introdução. Mostramos como o "
+    "prato é preparado e porque os temperos são tão importantes."
+)
 
 
 class LanguageDetectionTests(unittest.TestCase):
@@ -198,6 +224,34 @@ class LanguageDetectionTests(unittest.TestCase):
         self.assertEqual(narration.detect_language(""), "en")
         self.assertEqual(narration.detect_language("   "), "en")
         self.assertEqual(narration.detect_language("123 ... !!!"), "en")
+
+    def test_non_latin_scripts_detect_their_language(self):
+        # Kana / Hangul / Cyrillic each pin down exactly one deck language.
+        self.assertEqual(narration.detect_language(JA_PURE), "ja")
+        self.assertEqual(narration.detect_language(KO_PURE), "ko")
+        self.assertEqual(narration.detect_language(RU_PURE), "ru")
+
+    def test_latin_markers_detect_their_language(self):
+        for code, sample in (
+            ("de", DE_PURE),
+            ("fr", FR_PURE),
+            ("es", ES_PURE),
+            ("it", IT_PURE),
+            ("pt", PT_PURE),
+        ):
+            self.assertEqual(narration.detect_language(sample), code, msg=code)
+
+    def test_inverted_punctuation_is_spanish(self):
+        self.assertEqual(narration.detect_language("¿Qué es esto?"), "es")
+
+    def test_english_with_foreign_words_stays_english(self):
+        # Function words alone are not enough — English must win outright.
+        self.assertEqual(
+            narration.detect_language(
+                "This wine list is on the table for our guests."
+            ),
+            "en",
+        )
 
     def test_override_forces_deck_language(self):
         self.assertEqual(
@@ -226,6 +280,90 @@ class LanguageDetectionTests(unittest.TestCase):
         self.assertEqual(narration.parse_language_override("chinese"), "zh")
         self.assertEqual(narration.parse_language_override("EN"), "en")
         self.assertEqual(narration.parse_language_override("bogus"), "auto")
+
+
+class MultiLanguageTests(unittest.TestCase):
+    """All 10 languages Qwen3-TTS speaks must be reachable end to end."""
+
+    def test_supported_codes_match_mlx_names(self):
+        self.assertEqual(
+            set(narration.SUPPORTED_LANGUAGE_CODES),
+            set(narration.MLX_LANGUAGE_NAMES),
+        )
+        self.assertEqual(
+            narration.VOICEBOX_LANGUAGE_CODES, narration.SUPPORTED_LANGUAGE_CODES
+        )
+        self.assertIn("auto", narration.MLX_LANGUAGE_CODES)
+
+    def test_engine_codes_for_every_language(self):
+        for code in narration.SUPPORTED_LANGUAGE_CODES:
+            # Voicebox takes the code as-is; one-voice/mlx takes the full name.
+            self.assertEqual(narration.voicebox_language(code), code)
+            self.assertEqual(
+                narration.mlx_language(code), narration.MLX_LANGUAGE_NAMES[code]
+            )
+        # Unknown / empty input lands on the English default, never raises.
+        self.assertEqual(narration.voicebox_language("klingon"), "en")
+        self.assertEqual(narration.mlx_language("klingon"), "english")
+        self.assertEqual(narration.mlx_language(""), "english")
+        self.assertEqual(narration.mlx_language("auto"), "english")
+        # Names are accepted wherever codes are.
+        self.assertEqual(narration.mlx_language("chinese"), "chinese")
+        self.assertEqual(narration.voicebox_language("German"), "de")
+
+    def test_canonical_language_accepts_names_and_region_tags(self):
+        cases = {
+            "en": "en", "english": "en", "EN": "en", "en-US": "en",
+            "zh": "zh", "chinese": "zh", "CN": "zh", "mandarin": "zh",
+            "zh-Hans": "zh",
+            "ja": "ja", "japanese": "ja", "jp": "ja",
+            "ko": "ko", "korean": "ko", "kr": "ko",
+            "de": "de", "german": "de",
+            "fr": "fr", "french": "fr",
+            "ru": "ru", "russian": "ru",
+            "pt": "pt", "portuguese": "pt", "pt-BR": "pt", "pt_BR": "pt",
+            "es": "es", "spanish": "es",
+            "it": "it", "italian": "it",
+            "auto": "auto", "detect": "auto",
+        }
+        for value, expected in cases.items():
+            self.assertEqual(
+                narration.canonical_language(value), expected, msg=value
+            )
+        self.assertIsNone(narration.canonical_language(None))
+        self.assertIsNone(narration.canonical_language("   "))
+        self.assertIsNone(narration.canonical_language("klingon"))
+
+    def test_parse_language_override_accepts_all_codes(self):
+        for code in narration.SUPPORTED_LANGUAGE_CODES:
+            self.assertEqual(narration.parse_language_override(code), code)
+        self.assertEqual(narration.parse_language_override("german"), "de")
+        self.assertEqual(narration.parse_language_override("pt-BR"), "pt")
+        self.assertEqual(narration.parse_language_override(None), "auto")
+        self.assertEqual(narration.parse_language_override("bogus"), "auto")
+
+    def test_resolve_forces_every_language(self):
+        # A deck-level override forces every slide, whatever its own script.
+        for code in narration.SUPPORTED_LANGUAGE_CODES:
+            for sample in (EN_PURE, ZH_PURE):
+                self.assertEqual(
+                    narration.resolve_narration_language(sample, override=code),
+                    code,
+                    msg=f"{code} on {sample[:12]!r}",
+                )
+        # "auto" and language names behave like an override too.
+        self.assertEqual(
+            narration.resolve_narration_language(EN_PURE, override="auto"), "en"
+        )
+        self.assertEqual(
+            narration.resolve_narration_language(EN_PURE, override="german"), "de"
+        )
+
+    def test_japanese_and_mandarin_share_ideographic_full_stop(self):
+        # Both use 。as the sentence terminator (deck_to_video relies on this).
+        for code in ("zh", "ja"):
+            self.assertEqual(narration.voicebox_language(code), code)
+        self.assertEqual(narration.mlx_language("ja"), "japanese")
 
 
 class CjkPunctuationTests(unittest.TestCase):

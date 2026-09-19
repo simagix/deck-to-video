@@ -149,8 +149,9 @@ def generate_one_voice_audio(
     - ``personality`` is ignored (one-voice has no LLM rewrite).
     - ``engine`` is ignored (one-voice only uses Qwen3-TTS).
     - ``instruct`` is prepended to the text as a tone direction.
-    - ``language`` is ``"en"``/``"zh"`` and maps to mlx-audio
-      ``lang_code="english"``/``"chinese"`` for the Qwen3-TTS voice clone.
+    - ``language`` is any canonical code from narration.py (``"en"``, ``"zh"``,
+      ``"ja"``, …) and maps to the mlx-audio ``lang_code`` Qwen3-TTS expects
+      (``"english"``, ``"chinese"``, ``"japanese"``, …) for the voice clone.
     """
     if not text or not text.strip():
         raise ValueError("Cannot generate audio from empty text")
