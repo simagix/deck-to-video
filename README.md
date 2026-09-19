@@ -216,12 +216,12 @@ To inspect the exact JSON that will be sent for a notes file, run:
 python show_voicebox_payload.py out/<deck>/slide_01_notes.txt
 ```
 
-### Sound effect tags (punchlines)
+### Sound effect + pause tags (punchlines & timing)
 
-Drop a bracketed SFX tag right after a punchline — even mid-slide with more
-narration following. The notes are split at the tag into separate narration
-takes, and the sample is spliced exactly between them (after a short comedic
-beat, ~0.25s), so the hit lands precisely where the tag sat in the text:
+Drop a bracketed SFX or pause tag right after a punchline — even mid-slide
+with more narration following. The notes are split at the tag into separate
+narration takes, and the SFX sample (or exact silence) is stitched precisely
+where the tag sat in the text:
 
 ```text
 [voice: Simone | tone: witty]
@@ -234,11 +234,19 @@ I asked the intern to auto-merge. [laugh] It merged main into staging.
 Twice.
 ```
 
-- **Rimshot** — `[sfx: rimshot]`, `[badumtss]`, `[ba dum tss]`, `[rimshot]` all play *Ba Dum Tss*. **Sad trombone** — `[sfx: sad_trombone]`, `[sad trombone]`, `[wah wah wah]`. **Drum roll** — `[sfx: drum_roll]`, `[drumroll]`, `[drum roll]` rolls for ~4s, so place it *before* the reveal (`And the winner is… [drumroll] …you!`) to build tension into the punchline. Multiple tags per slide are supported.
+Need a beat of silence instead of a hit — for a dramatic pause, a breath
+between paragraphs, or spacing two voice blocks? Use a pause tag:
+
+```text
+Previously on Bazza in the Wild... [pause: 1s] Bazza wakes up hungry.
+```
+
+- **Rimshot** — `[sfx: rimshot]`, `[badumtss]`, `[ba dum tss]`, `[rimshot]` all play *Ba Dum Tss* (after a short comedic beat, ~0.25s). **Sad trombone** — `[sfx: sad_trombone]`, `[sad trombone]`, `[wah wah wah]`. **Drum roll** — `[sfx: drum_roll]`, `[drumroll]`, `[drum roll]` rolls for ~4s, so place it *before* the reveal (`And the winner is… [drumroll] …you!`) to build tension into the punchline. Multiple tags per slide are supported.
+- **Pause** — `[pause]`, `[pause: 1s]`, `[pause 500ms]` all stitch exact silence between the surrounding takes (no TTS call, no end-of-speech guessing). Bare `[pause]` is 1s; units accept `ms` or `s`/`sec`/`second(s)` (default seconds), clamped to 10s. Combine with SFX freely: `...punchline. [pause: 0.5s] [sfx: rimshot] ...aftermath.` pauses half a second, then hits the rimshot.
 - **Sample resolution:** your `assets/ba_dum_tss.wav` always wins; `ba_dum_tss_default.wav` is only a fallback so fresh clones work out of the box (`make_sfx_assets.py` regenerates it without ever touching yours).
 - **Stereo survives the splice:** if your sample has more channels than the narration, the slide WAV is upgraded to match and the voice duplicated across channels — a true-stereo rimshot keeps its left/right image (dual-mono recordings are unaffected).
 - Each take keeps its own `[voice:` / `[tone:]` context as its style instruct (the example above speaks the setup angry and the follow-up dramatic). Slides with voice/tone tags make one extra TTS call per split.
-- Tags are stripped from the text sent to the TTS engine (never read aloud); unknown names are ignored safely.
+- Tags are stripped from the text sent to the TTS engine (never read aloud); unknown SFX names are ignored safely, and unparseable pause durations are stripped while inserting no silence.
 - The result is baked into `slide_XX_voiceover.wav` at generation time, so video assembly needs no changes and cached-WAV reuse keeps working. Re-run with `--gen-voiceover` after adding or editing a tag.
 - **Your own recording:** drop `assets/ba_dum_tss.wav` (convert any licensed rimshot to WAV) and it takes precedence over the synthesized default in `ba_dum_tss_default.wav`, which `make_sfx_assets.py` regenerates without ever touching your file.
 

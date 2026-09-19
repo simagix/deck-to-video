@@ -1,9 +1,10 @@
-"""Unit tests for punchline sound effects: [sfx: rimshot] tag parsing in
-narration.py and WAV mixing in sfx.py.
+"""Unit tests for punchline sound effects and pause timing: [sfx: rimshot]
+and [pause: 1s] tag parsing in narration.py and WAV mixing in sfx.py.
 
-Regression guards: SFX tags must be stripped from text sent to Voicebox,
-recognized cues must resolve to canonical sample names, and overlay must land
-the hit right after end-of-speech while extending (never truncating) the WAV.
+Regression guards: SFX/pause tags must be stripped from text sent to
+Voicebox, recognized cues must resolve to canonical sample names /
+durations, and mixing must land the hit (or silence) exactly where the tag
+sat while extending (never truncating) the WAV.
 """
 
 from __future__ import annotations
@@ -104,6 +105,65 @@ class ParseSfxCuesTests(unittest.TestCase):
 
     def test_voice_tone_tags_not_confused_with_sfx(self):
         self.assertEqual(narration.parse_sfx_cues("[voice: Simone | tone: witty] hi"), [])
+
+
+class ParsePauseCuesTests(unittest.TestCase):
+    def test_bare_pause_uses_default(self):
+        from paths import DEFAULT_PAUSE_SECONDS
+
+        self.assertEqual(narration.parse_pause_cues("[pause]"), [DEFAULT_PAUSE_SECONDS])
+
+    def test_seconds_and_variants(self):
+        for tag, expected in (
+            ("[pause: 1s]", 1.0),
+            ("[pause 1s]", 1.0),
+            ("[pause:1.5s]", 1.5),
+            ("[pause: 2]", 2.0),
+            ("[pause: 2 seconds]", 2.0),
+            ("[PAUSE: 750 MS]", 0.75),
+            ("[pause 500ms]", 0.5),
+        ):
+            with self.subTest(tag=tag):
+                self.assertEqual(narration.parse_pause_cues(f"Hi.{tag}Bye."), [expected])
+
+    def test_clamps_to_max(self):
+        from paths import MAX_PAUSE_SECONDS
+
+        self.assertEqual(narration.parse_pause_cues("[pause: 60s]"), [MAX_PAUSE_SECONDS])
+
+    def test_unparseable_yields_no_cue(self):
+        self.assertEqual(narration.parse_pause_cues("[pause: soon]"), [])
+
+    def test_paused_word_is_not_a_tag(self):
+        self.assertEqual(narration.parse_pause_cues("[paused]"), [])
+
+    def test_keeps_order_with_sfx(self):
+        notes = "A. [pause: 1s] B. [badumtss]"
+        self.assertEqual(narration.parse_pause_cues(notes), [1.0])
+        parts = narration.split_notes_on_sfx(notes)
+        self.assertEqual(
+            [p["kind"] for p in parts],
+            ["narration", "pause", "narration", "sfx"],
+        )
+        self.assertEqual(parts[1], {"kind": "pause", "seconds": 1.0})
+
+
+class StripPauseTagsTests(unittest.TestCase):
+    def test_pause_stripped_from_tts_text_both_modes(self):
+        notes = "Previously... [pause: 1s] Bazza wakes up."
+        for personality in (False, True):
+            with self.subTest(personality=personality):
+                out = narration.prepare_narration(notes, personality=personality)
+                self.assertNotIn("pause", out.lower())
+                self.assertNotIn("[", out)
+                self.assertIn("Previously", out)
+
+    def test_unparseable_pause_stripped_but_splits_nothing(self):
+        out = narration.prepare_narration("A. [pause: soon] B.")
+        self.assertNotIn("pause", out.lower())
+        parts = narration.split_notes_on_sfx("A. [pause: soon] B.")
+        self.assertEqual(len(parts), 1)
+        self.assertEqual(parts[0]["kind"], "narration")
 
 
 class StripSfxTagsTests(unittest.TestCase):
@@ -385,6 +445,42 @@ class AssembleVoiceoverTests(unittest.TestCase):
         self.assertEqual(params.nchannels, max(1, native_channels))
         # The voice is duplicated identically across every output channel.
         np.testing.assert_array_equal(mixed[:, 0], mixed[:, -1])
+
+    def test_stitches_exact_pause_between_two_takes(self):
+        take1 = self._take("p1.wav", self.rate, 0.30)
+        take2 = self._take("p2.wav", self.rate, 0.25)
+        out = os.path.join(self.tmp.name, "paused.wav")
+        pause, tail = 1.0, 0.5
+        sfx.assemble_voiceover(
+            [("wav", take1), ("pause", pause), ("wav", take2)],
+            out,
+            tail_seconds=tail,
+        )
+        params, mixed = _read_wav(out)
+        self.assertAlmostEqual(
+            params.nframes / params.framerate, 0.30 + pause + 0.25 + tail, delta=0.02
+        )
+        # The pause window is exactly silent; take 2 starts audible after it.
+        pause_start = int(round(0.30 * params.framerate))
+        pause_end = int(round((0.30 + pause) * params.framerate))
+        self.assertLess(float(np.abs(mixed[pause_start:pause_end]).max()), 1e-9)
+        self.assertGreater(
+            float(np.abs(mixed[pause_end : pause_end + params.framerate]).max()), 0.05
+        )
+
+    def test_pause_only_notes_still_require_a_take(self):
+        with self.assertRaises(ValueError):
+            sfx.assemble_voiceover(
+                [("pause", 1.0)], os.path.join(self.tmp.name, "x.wav")
+            )
+
+    def test_negative_pause_raises(self):
+        take1 = self._take("n1.wav", self.rate, 0.30)
+        with self.assertRaises(ValueError):
+            sfx.assemble_voiceover(
+                [("wav", take1), ("pause", -1.0)],
+                os.path.join(self.tmp.name, "y.wav"),
+            )
 
 
 if __name__ == "__main__":

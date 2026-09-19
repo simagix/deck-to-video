@@ -21,6 +21,11 @@ DEFAULT_SFX_GAIN = 0.9
 # Background music ([bgm: track.mp3]): how loud the music plays relative to
 # the voiceover. Mixed in via an ffmpeg amix pass in video_assembly.py.
 DEFAULT_BG_MUSIC_VOLUME = 0.15
+# In-voiceover pauses ([pause: 1s]): silence stitched between narration takes
+# in sfx.assemble_voiceover. Bare [pause] falls back to this default; tag
+# durations are clamped to MAX_PAUSE_SECONDS to catch typos like [pause 60s].
+DEFAULT_PAUSE_SECONDS = 1.0
+MAX_PAUSE_SECONDS = 10.0
 DEFAULT_FPS = 24
 DEFAULT_KEN_BURNS_ZOOM = 1.15
 DEFAULT_KEN_BURNS_ZOOM = 1.15

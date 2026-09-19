@@ -330,8 +330,74 @@ SFX_ALIASES = {
     "drumroll": "drum_roll",
     "chaching": "cha_ching",
     "cha_ching": "cha_ching",
+    "doorslam": "door_slam",
     "door_slam": "door_slam",
 }
+
+# An in-voiceover pause tag, e.g. ``[pause]``, ``[pause: 1s]``, ``[pause 500ms]``.
+# Bare ``[pause]`` falls back to ``DEFAULT_PAUSE_SECONDS``; otherwise the first
+# number + optional unit is honored (``ms`` for milliseconds, anything
+# else — s/sec/secs/second/seconds/empty/typo — for seconds).
+# Stripped from TTS text; consumed as silence by ``sfx.assemble_voiceover``.
+# The separator group requires ``:`` / whitespace / end-bracket so words like
+# ``[paused]`` never match.
+_PAUSE_TAG = re.compile(
+    r"\[\s*pause(?P<sep>\s*:\s*|\s+|(?=\s*\]))(?P<duration>[^\]\r\n]*?)\s*\]",
+    re.IGNORECASE,
+)
+
+#: Units accepted inside a ``[pause: ...]`` tag (lowercased, stripped).
+_PAUSE_MS_UNITS = frozenset({"ms", "msec", "msecs", "millisecond", "milliseconds"})
+
+#: Fallback silence for a bare ``[pause]`` (imported lazily to avoid a cycle:
+#: ``paths`` imports nothing from ``narration``).
+_DEFAULT_PAUSE_SECONDS = 1.0
+_MAX_PAUSE_SECONDS = 10.0
+
+
+def _parse_pause_seconds(raw: Optional[str]) -> Optional[float]:
+    """Parse the duration inside a ``[pause: ...]`` tag to seconds.
+
+    Returns ``DEFAULT_PAUSE_SECONDS`` for a bare ``[pause]`` / empty duration,
+    a clamped ``0.0``–``MAX_PAUSE_SECONDS`` value for a recognized number +
+    unit, or ``None`` when the tag carries no parseable duration (so callers
+    can strip the tag from TTS text without inserting silence).
+    """
+    try:
+        from paths import DEFAULT_PAUSE_SECONDS, MAX_PAUSE_SECONDS
+    except ImportError:  # pragma: no cover - importable in tests/prod
+        DEFAULT_PAUSE_SECONDS, MAX_PAUSE_SECONDS = (
+            _DEFAULT_PAUSE_SECONDS,
+            _MAX_PAUSE_SECONDS,
+        )
+    if raw is None or not raw.strip():
+        return float(DEFAULT_PAUSE_SECONDS)
+    text = raw.strip().lower()
+    match = re.search(r"(\d+(?:\.\d+)?)\s*([a-z]*)", text)
+    if not match:
+        return None
+    value = float(match.group(1))
+    unit = (match.group(2) or "s").strip()
+    if unit in _PAUSE_MS_UNITS:
+        value = value / 1000.0
+    # Anything else (s/sec/second/seconds/empty/typo) reads as seconds.
+    return max(0.0, min(value, float(MAX_PAUSE_SECONDS)))
+
+
+def _strip_pause_tags(text: str) -> str:
+    """Remove ``[pause]`` / ``[pause: 1s]`` timing tags.
+
+    The tags become silence at voiceover-assembly time (see
+    ``sfx.assemble_voiceover``); the raw tag text must never reach the TTS.
+    Like unknown ``[sfx: ...]`` names, even an unparseable duration is
+    stripped so typos never leak into narration.
+    """
+    if not text:
+        return text
+    stripped = _PAUSE_TAG.sub("", text)
+    stripped = re.sub(r"[ \t]+\n", "\n", stripped)
+    stripped = re.sub(r"[ \t]{2,}", " ", stripped)
+    return stripped.strip()
 
 # A background-music tag: ``[bgm: TRACK]`` with optional trailing spec fields
 # separated by pipes, e.g. ``[bgm: ambient_loop | volume: 0.2]``. Field
@@ -426,51 +492,81 @@ def parse_sfx_cues(notes_text: str) -> List[str]:
     return cues
 
 
+def parse_pause_cues(notes_text: str) -> List[float]:
+    """Return pause durations (seconds) requested by *notes_text*, in order.
+
+    Recognizes ``[pause]`` (→ ``DEFAULT_PAUSE_SECONDS``), ``[pause: 1s]``,
+    ``[pause 500ms]``, and friends. Tags without a parseable duration yield
+    no cue — ``split_notes_on_sfx`` leaves them inside the surrounding take
+    (they are still stripped from TTS text) so a typo inserts no silence.
+    """
+    cues: List[float] = []
+    for match in _PAUSE_TAG.finditer(notes_text or ""):
+        seconds = _parse_pause_seconds(match.group("duration"))
+        if seconds is not None:
+            cues.append(seconds)
+    return cues
+
+
 def split_notes_on_sfx(
     notes_text: str,
     supported: Optional[AbstractSet[str]] = None,
 ) -> List[dict]:
-    """Split speaker notes into narration takes interleaved with SFX cues.
+    """Split speaker notes into narration takes interleaved with SFX/pause cues.
 
-    Recognized sound-effect tags act as split points; everything between two
-    tags (including any ``[voice: ... | tone: ...]`` markers) stays together
-    as one narration take, so each take can carry its own tone instruct.
+    Recognized sound-effect tags and ``[pause ...]`` timing tags act as split
+    points; everything between two tags (including any
+    ``[voice: ... | tone: ...]`` markers) stays together as one narration
+    take, so each take can carry its own tone instruct.
 
     Returns an ordered list of dicts:
         - ``{"kind": "narration", "source": <raw notes substring>}``
         - ``{"kind": "sfx", "name": <canonical sfx name>}``
+        - ``{"kind": "pause", "seconds": <float seconds>}``
 
     Unrecognized SFX names are left inside the surrounding take (they are
-    stripped from the TTS text later); recognized ones always split.
-    Notes without any recognized cue yield a single narration part covering
-    the whole text (backward compatible).
+    stripped from the TTS text later); unparseable pause tags are likewise
+    left in place (stripped, but inserting no silence). Notes
+    without any recognized cue yield a single narration part covering the
+    whole text (backward compatible).
     """
     if not notes_text or not notes_text.strip():
         return []
 
     allowed = set(supported) if supported is not None else set(SFX_ALIASES.values())
 
-    # Collect split positions for recognized SFX cues only; voice/tone tags
-    # stay embedded within their take's raw source text.
-    splits: List[Tuple[int, int, str]] = []
+    # Collect split positions for recognized SFX cues and parseable pauses
+    # only; voice/tone tags stay embedded within their take's raw source text.
+    splits: List[Tuple[int, int, dict]] = []
     for match in _SFX_TAG.finditer(notes_text):
         raw = match.group("name")
         if raw is None:
             raw = match.group("alias")
         canonical = _canonical_sfx_name(raw)
         if canonical in allowed:
-            splits.append((match.start(), match.end(), canonical))
+            splits.append((match.start(), match.end(), {"kind": "sfx", "name": canonical}))
+    for match in _PAUSE_TAG.finditer(notes_text):
+        seconds = _parse_pause_seconds(match.group("duration"))
+        if seconds is not None:
+            splits.append(
+                (match.start(), match.end(), {"kind": "pause", "seconds": seconds})
+            )
+    splits.sort(key=lambda split: (split[0], split[1]))
 
     if not splits:
         return [{"kind": "narration", "source": notes_text}]
 
     parts: List[dict] = []
     cursor = 0
-    for start, end, name in splits:
+    for start, end, cue in splits:
+        if start < cursor:
+            # Overlapping SFX/pause matches (should not happen with distinct
+            # tag prefixes) — keep the first and skip the overlapped one.
+            continue
         source = notes_text[cursor:start]
         if source.strip():
             parts.append({"kind": "narration", "source": source})
-        parts.append({"kind": "sfx", "name": name})
+        parts.append(cue)
         cursor = end
     tail = notes_text[cursor:]
     if tail.strip():
@@ -640,6 +736,7 @@ def prepare_narration(raw_notes: str, *, personality: bool = False) -> str:
     text = _strip_voice_tone_tags(raw_notes)
     text = _strip_sfx_tags(text)
     text = _strip_bgm_tags(text)
+    text = _strip_pause_tags(text)
     text = strip_stage_directions(text)
     if not text:
         return ""

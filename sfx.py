@@ -1,10 +1,13 @@
-"""Sound-effect mixing for punchline cues (e.g. a rimshot after a joke).
+"""Sound-effect and pause mixing for voiceover cues.
 
 A slide's speaker notes may carry a bracketed ``[sfx: rimshot]`` tag (see
-``narration.parse_sfx_cues``). When a tagged slide's voiceover WAV is
+``narration.parse_sfx_cues``) or a ``[pause: 1s]`` timing tag (see
+``narration.parse_pause_cues``). When a tagged slide's voiceover WAV is
 generated, :func:`overlay_sfx_on_wav` mixes the sample directly into the
-WAV right after the last spoken word, so each slide remains one
-self-contained audio file and ``video_assembly`` needs no changes.
+WAV right after the last spoken word, and :func:`assemble_voiceover`
+stitches pauses as exact silence between narration takes, so each slide
+remains one self-contained audio file and ``video_assembly`` needs no
+changes.
 """
 
 from __future__ import annotations
@@ -154,14 +157,16 @@ def assemble_voiceover(
     gain: float = DEFAULT_SFX_GAIN,
     tail_seconds: float = DEFAULT_VOICEOVER_TRAIL_SILENCE_SECONDS,
 ) -> List[str]:
-    """Stitch narration takes and SFX hits into one slide voiceover WAV.
+    """Stitch narration takes, pauses, and SFX hits into one slide voiceover WAV.
 
-    *parts* is an ordered sequence of ``("wav", path)`` narration takes and
-    ``("sfx", name)`` effects. Each SFX is preceded by *beat_seconds* of
-    silence (the comedic pause after the preceding take), so the hit lands
-    exactly where the tag sat in the notes — no end-of-speech guessing.
-    Takes are resampled to the first take's format if Voicebox ever returns
-    mixed formats, and *tail_seconds* of silence closes the file.
+    *parts* is an ordered sequence of ``("wav", path)`` narration takes,
+    ``("pause", seconds)`` silences, and ``("sfx", name)`` effects. Each SFX
+    is preceded by *beat_seconds* of silence (the comedic pause after the
+    preceding take), and each pause inserts exactly its own duration of
+    silence, so the timing lands exactly where the tag sat in the notes —
+    no end-of-speech guessing. Takes are resampled to the first take's
+    format if Voicebox ever returns mixed formats, and *tail_seconds* of
+    silence closes the file.
 
     Channel handling: if any effect sample has more channels than the
     narration takes (e.g. a true-stereo rimshot on a mono voiceover), the
@@ -197,6 +202,11 @@ def assemble_voiceover(
                     channels,
                 )
             )
+        elif kind == "pause":
+            seconds = float(value)
+            if seconds < 0:
+                raise ValueError(f"Pause duration must be >= 0, got {value!r}")
+            chunks.append(np.zeros((int(round(seconds * rate)), channels)))
         elif kind == "sfx":
             chunks.append(np.zeros((int(round(beat_seconds * rate)), channels)))
             signal = load_sfx(value, rate, channels, keep_source_channels=True)

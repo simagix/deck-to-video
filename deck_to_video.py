@@ -352,7 +352,7 @@ def _generate_voiceover_for_slide(
     wav_path = _voiceover_wav_path(output_dir, slide_idx)
     parts = split_notes_on_sfx(notes_text, supported=set(SFX_SAMPLES))
 
-    if not any(part["kind"] == "sfx" for part in parts):
+    if not any(part["kind"] in ("sfx", "pause") for part in parts):
         # Single-take path (no sound-effect cues): check for multiple voices/tones
         blocks = _parse_blocks(notes_text)
         if len(blocks) <= 1:
@@ -410,17 +410,23 @@ def _generate_voiceover_for_slide(
         print(f"   ✅ Slide {slide_idx}: saved {wav_path}")
         return wav_path
 
-    # Multi-take path: each recognized "[sfx: ...]" tag splits the notes into
-    # separate takes. Within each narration part, voice/tone changes are
-    # also split into separate takes so multi-voice slides sound right.
+    # Multi-take path: each recognized "[sfx: ...]" / "[pause ...]" tag splits
+    # the notes into separate takes. Within each narration part, voice/tone
+    # changes are also split into separate takes so multi-voice slides sound
+    # right. Pause tags become exact silence stitched between takes.
     pieces: List[Tuple[str, str]] = []
     inserted: List[str] = []
+    paused: List[float] = []
     take_no = 0
     voice_name = profile_id  # track current voice across blocks
     with tempfile.TemporaryDirectory(prefix=f"slide_{slide_idx:02d}_sfx_") as tmp_dir:
         for part in parts:
             if part["kind"] == "sfx":
                 pieces.append(("sfx", part["name"]))
+                continue
+            if part["kind"] == "pause":
+                pieces.append(("pause", part["seconds"]))
+                paused.append(part["seconds"])
                 continue
             # Split this narration part by voice/tone changes
             blocks = _parse_blocks(part["source"])
@@ -446,6 +452,8 @@ def _generate_voiceover_for_slide(
         inserted = assemble_voiceover(pieces, wav_path)
     for name in inserted:
         print(f"   🥁 Slide {slide_idx}: {name} mid-slide")
+    for seconds in paused:
+        print(f"   ⏸️  Slide {slide_idx}: {seconds:g}s pause stitched in")
     print(f"   ✅ Slide {slide_idx}: saved {wav_path}")
     return wav_path
 
